@@ -27,6 +27,7 @@
 
 ### Edit config/app_config.json:
 
+---
 {
    "camera_type": "ptz",
     "ptz": {
@@ -42,8 +43,11 @@
     "buffer_size": 5,
     "min_frames": 5
 }
+---
+
 
 ### config/db_config.json:
+---
 {
     "host": "<hostname>",
     "port": "<port-no>",
@@ -51,5 +55,6 @@
     "password": "<user-password>",
     "database": "<web_attendance_system>"
 }
+---
 
 
