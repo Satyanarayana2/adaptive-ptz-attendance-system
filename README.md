@@ -28,6 +28,7 @@
 ### Edit config/app_config.json:
 
 ---
+```yaml
 {
    "camera_type": "ptz",
     "ptz": {
@@ -44,10 +45,12 @@
     "min_frames": 5
 }
 ---
+```
 
 
 ### config/db_config.json:
 ---
+```yaml
 {
     "host": "<hostname>",
     "port": "<port-no>",
@@ -55,6 +58,7 @@
     "password": "<user-password>",
     "database": "<web_attendance_system>"
 }
+```
 ---
 
 
