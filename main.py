@@ -11,7 +11,7 @@ from utils.face_alignment import FaceAligner
 
 from core.recognizer import Recognizer
 from core.attendance_logger import AttendanceLogger
-from core.tracker import SimpleTracker
+from core.tracker import KalmanTracker
 from core.quality_selector import QualitySelector
 
 from utils.ptz.axis_camera import AxisCamera
@@ -51,7 +51,7 @@ def main():
         threshold=app_config["recognition_threshold"]  # tune
     )
 
-    tracker = SimpleTracker(iou_threshold=app_config["iou_threshold"],max_missed=app_config["max_missed"])
+    tracker = KalmanTracker(iou_threshold=app_config["iou_threshold"], max_missed=app_config["max_missed"])
     quality_selector = QualitySelector(buffer_size=app_config["buffer_size"], min_frames=app_config["min_frames"])
 
     attendance_logger = AttendanceLogger(db, cooldown_seconds=app_config["cooldown_seconds"]) 
@@ -93,7 +93,7 @@ def main():
             continue
 
         faces = detector.detect(frame)
-        print(f"[DEBUG] Frame {tracker.frame_id}: Detected {len(faces)} faces")
+        print(f"[DEBUG] Detected {len(faces)} faces")
         tracked_faces = tracker.update(faces)
         if len(tracked_faces) > 0:
                 print(f"[DEBUG] Tracked {len(tracked_faces)} faces")

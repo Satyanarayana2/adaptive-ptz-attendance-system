@@ -1,13 +1,10 @@
 # core/tracker.py
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
 
 def iou(boxA, boxB):
-    """
-    Compute Intersection over Union between two boxes.
-    box = [x1, y1, x2, y2]
-    """
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
     xB = min(boxA[2], boxB[2])
@@ -16,117 +13,131 @@ def iou(boxA, boxB):
     interW = max(0, xB - xA)
     interH = max(0, yB - yA)
     interArea = interW * interH
-
     if interArea == 0:
         return 0.0
 
-    boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
-    boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
-
+    boxAArea = (boxA[2]-boxA[0]) * (boxA[3]-boxA[1])
+    boxBArea = (boxB[2]-boxB[0]) * (boxB[3]-boxB[1])
     return interArea / float(boxAArea + boxBArea - interArea)
 
 
-class Track:
-    def __init__(self, track_id, bbox, kps, frame_id):
+class KalmanTrack:
+    def __init__(self, track_id, bbox):
         self.id = track_id
-        self.bbox = bbox
-        self.kps = kps
-        self.last_seen = frame_id
+        self.age = 0
         self.missed = 0
-        self.updated = True
-        self.age = 0  # Track how long this track has been active
+
+        # State: [cx, cy, w, h, vx, vy, vw, vh]
+        cx = (bbox[0] + bbox[2]) / 2
+        cy = (bbox[1] + bbox[3]) / 2
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+
+        self.x = np.array([cx, cy, w, h, 0, 0, 0, 0], dtype=float)
+
+        self.P = np.eye(8) * 10
+        self.F = np.eye(8)
+        for i in range(4):
+            self.F[i, i+4] = 1
+
+        self.Q = np.eye(8) * 0.01
+        self.H = np.eye(4, 8)
+        self.R = np.eye(4) * 1.0
+
+    def predict(self):
+        self.x = self.F @ self.x
+        self.P = self.F @ self.P @ self.F.T + self.Q
+
+    def update(self, bbox):
+        cx = (bbox[0] + bbox[2]) / 2
+        cy = (bbox[1] + bbox[3]) / 2
+        w = bbox[2] - bbox[0]
+        h = bbox[3] - bbox[1]
+        z = np.array([cx, cy, w, h])
+
+        y = z - self.H @ self.x
+        S = self.H @ self.P @ self.H.T + self.R
+        K = self.P @ self.H.T @ np.linalg.inv(S)
+
+        self.x = self.x + K @ y
+        self.P = (np.eye(8) - K @ self.H) @ self.P
+
+        self.missed = 0
+        self.age += 1
+
+    def get_bbox(self):
+        cx, cy, w, h = self.x[:4]
+        return [
+            int(cx - w/2), int(cy - h/2),
+            int(cx + w/2), int(cy + h/2)
+        ]
 
 
-class SimpleTracker:
-    """
-    Stable IoU-based tracker for attendance systems.
-
-    Responsibilities:
-      - Maintain consistent track_id across frames
-      - Tolerate bbox jitter and short detection loss
-      - Do NOT know about recognition or attendance
-    """
-
-    def __init__(self, iou_threshold=0.25, max_missed=5):
+class KalmanTracker:
+    def __init__(self, iou_threshold=0.3, max_missed=10):
         self.iou_threshold = iou_threshold
         self.max_missed = max_missed
-
         self.tracks = {}
-        self.next_track_id = 1
-        self.frame_id = 0
-
-    # ----------------------------------------------------
+        self.next_id = 1
 
     def update(self, detections):
-        """
-        detections: list of dicts
-          {
-            "bbox": [x1, y1, x2, y2],
-            "kps": keypoints
-          }
-
-        Returns:
-          list of dicts with track_id added
-        """
-
-        self.frame_id += 1
-
-        # Mark all tracks as not updated
+        # Predict
         for track in self.tracks.values():
-            track.updated = False
+            track.predict()
 
-        results = []
+        track_ids = list(self.tracks.keys())
+        det_boxes = [d["bbox"] for d in detections]
 
-        for det in detections:
-            bbox = det["bbox"]
-            kps = det["kps"]
+        if len(track_ids) == 0:
+            for det in detections:
+                self.tracks[self.next_id] = KalmanTrack(self.next_id, det["bbox"])
+                self.next_id += 1
+            return self._format_results(detections)
 
-            best_iou = 0
-            best_track = None
+        # IoU cost matrix
+        cost = np.zeros((len(track_ids), len(det_boxes)))
+        for i, tid in enumerate(track_ids):
+            tb = self.tracks[tid].get_bbox()
+            for j, db in enumerate(det_boxes):
+                cost[i, j] = 1 - iou(tb, db)
 
-            for track in self.tracks.values():
-                score = iou(bbox, track.bbox)
-                if score > best_iou:
-                    best_iou = score
-                    best_track = track
+        row, col = linear_sum_assignment(cost)
 
-            if best_track and best_iou >= self.iou_threshold:
-                # Assign existing track
-                best_track.bbox = bbox
-                best_track.kps = kps
-                best_track.last_seen = self.frame_id
-                best_track.missed = 0
-                best_track.updated = True
-                best_track.age += 1  # Increment age on successful update
+        assigned_tracks = set()
+        assigned_dets = set()
 
-                track_id = best_track.id
-            else:
-                # Create new track
-                track_id = self.next_track_id
-                self.next_track_id += 1
+        for r, c in zip(row, col):
+            if cost[r, c] < 1 - self.iou_threshold:
+                tid = track_ids[r]
+                self.tracks[tid].update(det_boxes[c])
+                assigned_tracks.add(tid)
+                assigned_dets.add(c)
 
-                self.tracks[track_id] = Track(
-                    track_id=track_id,
-                    bbox=bbox,
-                    kps=kps,
-                    frame_id=self.frame_id
-                )
+        # New tracks
+        for i, det in enumerate(detections):
+            if i not in assigned_dets:
+                self.tracks[self.next_id] = KalmanTrack(self.next_id, det["bbox"])
+                self.next_id += 1
 
-            results.append({
-                "track_id": track_id,
-                "bbox": bbox,
-                "kps": kps
-            })
-
-        # Cleanup dead tracks
+        # Cleanup
         to_delete = []
-        for track_id, track in self.tracks.items():
-            if not track.updated:
+        for tid, track in self.tracks.items():
+            if tid not in assigned_tracks:
                 track.missed += 1
             if track.missed > self.max_missed:
-                to_delete.append(track_id)
+                to_delete.append(tid)
 
-        for track_id in to_delete:
-            del self.tracks[track_id]
+        for tid in to_delete:
+            del self.tracks[tid]
 
+        return self._format_results(detections)
+
+    def _format_results(self, detections):
+        results = []
+        for track in self.tracks.values():
+            results.append({
+                "track_id": track.id,
+                "bbox": track.get_bbox(),
+                "kps": None
+            })
         return results
