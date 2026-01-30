@@ -48,6 +48,9 @@ class QualitySelector:
         Closer eye_y difference → more frontal.
         Score = 1.0 - normalized deviation
         """
+        if kps is None or "left_eye" not in kps or "right_eye" not in kps:
+            return 0.0  # No keypoints available, assume not frontal
+
         left_eye = kps["left_eye"]
         right_eye = kps["right_eye"]
 

@@ -4,6 +4,12 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 
+def is_valid_bbox(bbox):
+    """Check if bounding box is valid: x1 < x2, y1 < y2, and all coordinates >= 0"""
+    x1, y1, x2, y2 = bbox
+    return x1 >= 0 and y1 >= 0 and x2 > x1 and y2 > y1
+
+
 def iou(boxA, boxB):
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
@@ -22,10 +28,13 @@ def iou(boxA, boxB):
 
 
 class KalmanTrack:
-    def __init__(self, track_id, bbox):
+    def __init__(self, track_id, bbox, kps=None):
+        if not is_valid_bbox(bbox):
+            raise ValueError(f"Invalid bounding box: {bbox}")
         self.id = track_id
         self.age = 0
         self.missed = 0
+        self.kps = kps  # Store keypoints
 
         # State: [cx, cy, w, h, vx, vy, vw, vh]
         cx = (bbox[0] + bbox[2]) / 2
@@ -48,7 +57,10 @@ class KalmanTrack:
         self.x = self.F @ self.x
         self.P = self.F @ self.P @ self.F.T + self.Q
 
-    def update(self, bbox):
+    def update(self, bbox, kps=None):
+        if not is_valid_bbox(bbox):
+            raise ValueError(f"Invalid bounding box: {bbox}")
+        self.kps = kps  # Update keypoints
         cx = (bbox[0] + bbox[2]) / 2
         cy = (bbox[1] + bbox[3]) / 2
         w = bbox[2] - bbox[0]
@@ -81,18 +93,22 @@ class KalmanTracker:
         self.next_id = 1
 
     def update(self, detections):
+        # Filter out invalid detections
+        valid_detections = [d for d in detections if is_valid_bbox(d["bbox"])]
+
         # Predict
         for track in self.tracks.values():
             track.predict()
 
         track_ids = list(self.tracks.keys())
-        det_boxes = [d["bbox"] for d in detections]
+        det_boxes = [d["bbox"] for d in valid_detections]
+        det_kps = [d.get("kps") for d in valid_detections]  # Get kps if available
 
         if len(track_ids) == 0:
-            for det in detections:
-                self.tracks[self.next_id] = KalmanTrack(self.next_id, det["bbox"])
+            for det in valid_detections:
+                self.tracks[self.next_id] = KalmanTrack(self.next_id, det["bbox"], det.get("kps"))
                 self.next_id += 1
-            return self._format_results(detections)
+            return self._format_results(valid_detections)
 
         # IoU cost matrix
         cost = np.zeros((len(track_ids), len(det_boxes)))
@@ -109,14 +125,14 @@ class KalmanTracker:
         for r, c in zip(row, col):
             if cost[r, c] < 1 - self.iou_threshold:
                 tid = track_ids[r]
-                self.tracks[tid].update(det_boxes[c])
+                self.tracks[tid].update(det_boxes[c], det_kps[c])
                 assigned_tracks.add(tid)
                 assigned_dets.add(c)
 
         # New tracks
-        for i, det in enumerate(detections):
+        for i, det in enumerate(valid_detections):
             if i not in assigned_dets:
-                self.tracks[self.next_id] = KalmanTrack(self.next_id, det["bbox"])
+                self.tracks[self.next_id] = KalmanTrack(self.next_id, det["bbox"], det.get("kps"))
                 self.next_id += 1
 
         # Cleanup
@@ -130,7 +146,7 @@ class KalmanTracker:
         for tid in to_delete:
             del self.tracks[tid]
 
-        return self._format_results(detections)
+        return self._format_results(valid_detections)
 
     def _format_results(self, detections):
         results = []
@@ -138,6 +154,6 @@ class KalmanTracker:
             results.append({
                 "track_id": track.id,
                 "bbox": track.get_bbox(),
-                "kps": None
+                "kps": track.kps
             })
         return results
