@@ -98,6 +98,10 @@ def main():
         if len(tracked_faces) > 0:
                 print(f"[DEBUG] Tracked {len(tracked_faces)} faces")
 
+        # Clean up old tracks from recognition cache
+        current_track_ids = [track["track_id"] for track in tracked_faces]
+        attendance_logger.cleanup_old_tracks(current_track_ids)
+
         for track in tracked_faces:
             track_id = track["track_id"]
             bbox = track["bbox"]
@@ -125,15 +129,34 @@ def main():
 
             print(f"[DEBUG] Got best frame for track {track_id}")
 
-            try:
-                aligned = aligner.align(frame, kps)
-                print(f"[DEBUG] Aligned face for track {track_id}")
-            except Exception as e:
-                print(f"[DEBUG] Alignment failed for track {track_id}: {e}")
-                continue
+            # Layer 1: Check if we already recognized this person in this track
+            cached_person_id = attendance_logger.get_recognized_person(track_id)
+            
+            if cached_person_id is not None:
+                # Use cached result, skip expensive embedding
+                result = {
+                    "matched": True,
+                    "person_id": cached_person_id,
+                    "score": 0.0,
+                    "name": "cached",
+                    "cached": True
+                }
+                print(f"[DEBUG] Using CACHED recognition for track {track_id}")
+            else:
+                # First time: do expensive alignment + embedding + recognition
+                try:
+                    aligned = aligner.align(frame, kps)
+                    print(f"[DEBUG] Aligned face for track {track_id}")
+                except Exception as e:
+                    print(f"[DEBUG] Alignment failed for track {track_id}: {e}")
+                    continue
 
-            result = recognizer.recognize(aligned)
-            print(f"[DEBUG] Recognition result for track {track_id}: matched={result['matched']}, score={result.get('score', 'N/A')}")
+                result = recognizer.recognize(aligned)
+                print(f"[DEBUG] Recognition result for track {track_id}: matched={result['matched']}, score={result.get('score', 'N/A')}")
+                
+                # Cache the recognition if successful
+                if result["matched"]:
+                    attendance_logger.cache_recognition(track_id, result["person_id"])
 
             if result["matched"]:
                 attendance_logger.mark_attendance(
@@ -162,6 +185,18 @@ def main():
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
+    
+    # Print final cache statistics
+    stats = attendance_logger.get_cache_stats()
+    print("\n" + "=" * 60)
+    print("CACHE PERFORMANCE STATISTICS")
+    print("=" * 60)
+    print(f"Cache Hits:           {stats['cache_hits']}")
+    print(f"Cache Misses:         {stats['cache_misses']}")
+    print(f"Total Lookups:        {stats['total_lookups']}")
+    print(f"Hit Rate:             {stats['hit_rate_percent']:.2f}%")
+    print(f"Active Cached Tracks: {stats['active_cached_tracks']}")
+    print("=" * 60 + "\n")
 
     # Cleanup
     camera.release()
