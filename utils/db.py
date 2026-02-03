@@ -81,6 +81,23 @@ class Database:
             );
         """)
 
+        # Time Table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS timetable_slots (
+                    id SERIAL PRIMARY KEY,
+                    day_of_week INT NOT NULL,
+                    start_time TIME NOT NULL,
+                    end_time TIME NOT NULL,
+                    course_code TEXT NOT NULL,
+                    batch TEXT,
+                    section TEXT, 
+                    lab_name TEXT DEFAULT 'Hardware & IoT Lab',
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(day_of_week, start_time, end_time)
+                    );
+        """)
+
         self.conn.commit()
         print("[DB] Tables ensured.")
 

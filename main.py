@@ -13,6 +13,7 @@ from core.recognizer import Recognizer
 from core.attendance_logger import AttendanceLogger
 from core.tracker import KalmanTracker
 from core.quality_selector import QualitySelector
+from core.timetable_loader import load_timetable_from_json
 
 from utils.ptz.axis_camera import AxisCamera
 from utils.ptz.presets import ENTRANCE_VIEW
@@ -30,6 +31,10 @@ def main():
     person_count = db.get_person_count()
 
     print(f"[INFO] Found {person_count} known persons in database.")
+
+    # Load timetable into DB
+    load_timetable_from_json(db, json_path="config/timetable.json")
+    print("[INFO] Timetable data loaded into database.")
 
     # Load app config
     with open("config/app_config.json", "r") as f:
