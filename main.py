@@ -3,6 +3,7 @@ import cv2
 import time
 import json
 import os
+import sys
 from datetime import datetime
 
 from utils.db import Database
@@ -18,11 +19,13 @@ from core.timetable_loader import load_timetable_from_json
 
 from utils.ptz.axis_camera import AxisCamera
 from utils.ptz.presets import ENTRANCE_VIEW
+from utils.logs import Logger
 
 # Import Flask app and shared state
 from app import app, lock
 import app as flask_app
 
+sys.stdout = Logger()  # Redirect print statements to both console and log file
 last_unknown_save = {}
 
 

@@ -39,7 +39,7 @@ class AttendanceLogger:
         if track_id in self.track_recognition_cache:
             person_id = self.track_recognition_cache[track_id]
             self.cache_hits += 1
-            print(f"[CACHE HIT] Track {track_id} → Person {person_id} (Hits: {self.cache_hits})")
+            print(f"[CACHE HIT] Track {track_id} - - > Person {person_id} (Hits: {self.cache_hits})")
             return person_id
         else:
             self.cache_misses += 1
