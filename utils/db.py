@@ -19,10 +19,23 @@ class Database:
         self.config_path = config_path
         self.conn = None
         self._connect()
+        self._enable_vector_extension()
         register_vector(self.conn)
         self._create_tables()
 
     # --------------------------------------------------------------
+
+    def _enable_vector_extension(self):
+        curr = self.conn.cursor()
+        try:
+            curr.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            self.conn.commit()
+            print("[DB] Vector extension enabled.")
+        except Exception as e:
+            self.conn.rollback()
+            print(f"[DB] Error enabling vector extension: {e}")
+        finally:
+            curr.close()
 
     def _connect(self):
         """Load JSON config and connect to PostgreSQL."""
@@ -38,7 +51,8 @@ class Database:
                 user=cfg["user"],
                 password=cfg["password"],
                 database=cfg["database"]
-        )
+            )
+        
         print("[DB] Connected to PostgreSQL.")
 
     # --------------------------------------------------------------

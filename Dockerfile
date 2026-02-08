@@ -54,7 +54,7 @@ RUN mkdir -p /app/unknown_faces /app/Face_images /app/logs /app/config
 # should add or change accordingly later looking at the code structure
 
 # STEP7  setting env variables for the application
-ENV PYTHONBUFFERED=1 \
+ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 # CPU thread optimization for ONNX Runtime
 ENV OMP_NUM_THREADS=4 \
