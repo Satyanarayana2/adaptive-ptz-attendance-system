@@ -60,5 +60,30 @@
 }
 ```
 ---
+### config/timetable.json
+
+---
+```yaml
+[
+  {
+    "day_of_week": 1,
+    "start_time": "14:10",
+    "end_time": "16:00",
+    "course_code": "22AIE211",
+    "batch": "22AIE",
+    "section": "A"
+  },
+  {
+    "day_of_week": 3,
+    "start_time": "10:50",
+    "end_time": "12:30",
+    "course_code": "23AID212",
+    "batch": "23AID",
+    "section": "B"
+  }
+]
+```
+---
+
 
 
