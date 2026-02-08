@@ -31,9 +31,15 @@ class Database:
 
         with open(self.config_path, "r") as f:
             cfg = json.load(f)
+        
+        # Docker Detection logic
+        if os.path.exists("/.dockerenv"):
+            db_host = "db"  # Docker service name
+        else:
+            db_host = cfg["host"]
 
         self.conn = psycopg2.connect(
-            host=cfg["host"],
+            host=db_host,
             port=cfg["port"],
             user=cfg["user"],
             password=cfg["password"],
