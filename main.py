@@ -1,3 +1,4 @@
+import threading
 import cv2
 import time
 import json
@@ -17,6 +18,11 @@ from core.timetable_loader import load_timetable_from_json
 
 from utils.ptz.axis_camera import AxisCamera
 from utils.ptz.presets import ENTRANCE_VIEW
+
+# Import Flask app and shared state
+from app import app, lock
+import app as flask_app
+
 last_unknown_save = {}
 
 
@@ -87,18 +93,27 @@ def main():
                 print("[ERROR] Unable to open webcam. Exiting.")
                 return
     
-    # if not camera.open_stream():
-    #     print("[ERROR] Unable to open camera")
-    #     return
-
+    # Start Flask server in a background thread (non-daemon so it survives after AI loop stops)
+    flask_thread = threading.Thread(target=lambda: app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False), daemon=False)
+    flask_thread.start()
+    print("[INFO] Flask server started on http://0.0.0.0:5000")
+    time.sleep(2)  # Give Flask time to start
+    
+    # checking if this is running in docker or not
+    IS_DOCKER = os.path.exists("/.dockerenv")
     # Main loop
     while True:
+        if flask_app.stop_signal:
+            print("[INFO] Stop signal received. Ending main loop.")
+            break
+
         ret, frame = camera.read() # for PTZ camera, use read_frame() method
         if not ret:
             continue
 
         faces = detector.detect(frame)
-        print(f"[DEBUG] Detected {len(faces)} faces")
+        if len(faces) > 0:
+            print(f"[DEBUG] Detected {len(faces)} faces")
         tracked_faces = tracker.update(faces)
         if len(tracked_faces) > 0:
                 print(f"[DEBUG] Tracked {len(tracked_faces)} faces")
@@ -185,14 +200,28 @@ def main():
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6, color, 2
             )
-
-        cv2.imshow("Attendance System", frame)
-
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+        # Display the resulting frame in to the Flask app
+        with lock:
+            flask_app.output_frame = frame.copy()
+        if not IS_DOCKER:
+            cv2.imshow("Attendance System", frame)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                flask_app.stop_signal = True
+            
     
     # Print final cache statistics
     stats = attendance_logger.get_cache_stats()
+
+    flask_app.final_results = {
+        "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
+        "cache_hits": stats["cache_hits"],
+        "cache_misses": stats["cache_misses"],
+        "total_lookups": stats["total_lookups"],
+        "hit_rate_percent": stats["hit_rate_percent"],
+        "active_cached_tracks": stats["active_cached_tracks"],
+        "status": "stopped_by_user"
+    }
+
     print("\n" + "=" * 60)
     print("CACHE PERFORMANCE STATISTICS")
     print("=" * 60)
@@ -208,8 +237,10 @@ def main():
     cv2.destroyAllWindows()
     db.close()
 
-    print("=" * 60)
-    print("SYSTEM SHUTDOWN CLEANLY")
+    print("\n" + "=" * 60)
+    print("AI LOOP SHUTDOWN COMPLETE")
+    print("Flask server is still running - you can view results!")
+    print("Visit http://127.0.0.1:5000/results to see the results")
     print("=" * 60)
 
 
@@ -236,3 +267,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\n[INFO] Interrupted by user. Exiting...")
+        exit(0)

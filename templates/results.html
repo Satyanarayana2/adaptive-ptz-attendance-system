@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>System Results</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 50px; background-color: #f4f4f4; }
+        .results-container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); max-width: 900px; margin: 0 auto; }
+        pre { background: #eee; padding: 20px; border-radius: 5px; overflow-x: auto; font-size: 14px; text-align: left; }
+        .button-group { margin-top: 20px; display: flex; gap: 10px; }
+        .btn { padding: 10px 15px; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; border: none; cursor: pointer; }
+        .btn-back { background-color: #6c757d; }
+        .btn-back:hover { background-color: #5a6268; }
+        .btn-shutdown { background-color: #dc3545; }
+        .btn-shutdown:hover { background-color: #c82333; }
+    </style>
+</head>
+<body>
+    <div class="results-container">
+        <h1>Final System Statistics</h1>
+        <p>Data captured at the time of shutdown:</p>
+        <pre>{{ results_data | tojson(indent=4) }}</pre>
+        <div class="button-group">
+            <a href="/" class="btn btn-back">← Back to Home</a>
+            <button class="btn btn-shutdown" onclick="shutdownServer()">Shutdown Server</button>
+        </div>
+    </div>
+    <script>
+    function shutdownServer() {
+        if (confirm('Are you sure you want to shutdown the Flask server? You will need to restart the application.')) {
+            fetch('/shutdown_server', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => {
+                alert('Server is shutting down...');
+                setTimeout(() => {
+                    window.location.href = '/';
+                }, 2000);
+            })
+            .catch(err => console.error("Error shutting down server: ", err));
+        }
+    }
+    </script>
+</body>
+</html>

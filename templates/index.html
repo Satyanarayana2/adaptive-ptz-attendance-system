@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Attendance System Control</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f4f4f4; }
+        .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); display: inline-block; }
+        .btn { display: inline-block; margin: 10px; padding: 15px 25px; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; border: none; cursor: pointer; transition: background-color 0.3s; }
+        .btn-stream { background-color: #28a745; }
+        .btn-stream:hover { background-color: #218838; }
+        .btn-stop { background-color: #dc3545; }
+        .btn-stop:hover { background-color: #c82333; }
+        .btn-results { background-color: #007bff; }
+        .btn-results:hover { background-color: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Attendance System Control</h1>
+        <p>Manage the PTZ Camera Attendance System from this panel.</p>
+        <br>
+        <a href="/video_stream" class="btn btn-stream">Launch Live Video Stream</a>
+        <br>
+        <button onclick="return confirm('Are you sure you want to stop the main AI loop?') && (window.location.href='/stop_system')" class="btn btn-stop">Stop System & Generate Report</button>
+        <br>
+        <a href="/results" class="btn btn-results">View Latest Results</a>
+    </div>
+</body>
+</html>
