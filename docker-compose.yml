@@ -12,7 +12,7 @@ services:
       POSTGRES_PASSWORD: password
     volumes:
       # persistance keeps data on the lab coputer's desk
-      - ./postgrs_data:/var/lib/postgresql/data
+      - ./postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
   
@@ -28,7 +28,7 @@ services:
       - ./Face_images:/app/Face_images
       - ./unknown_faces:/app/unknown_faces
       - ./config:/app/config
-      - ./templates:app/templates
+      - ./templates:/app/templates
       - ./logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
