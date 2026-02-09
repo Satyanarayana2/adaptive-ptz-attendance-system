@@ -38,22 +38,26 @@ class Database:
             curr.close()
 
     def _connect(self):
-        """Load JSON config and connect to PostgreSQL."""
-        if not os.path.exists(self.config_path):
-            raise FileNotFoundError(f"DB config not found: {self.config_path}")
-
-        with open(self.config_path, "r") as f:
-            cfg = json.load(f)
-        
-            self.conn = psycopg2.connect(
-                host=cfg["host"], # trusting the config file as the docker is set up to use host networking and DB will run on host most likely. (set to 127.0.0.1 or localhost)
-                port=cfg["port"],
-                user=cfg["user"],
-                password=cfg["password"],
-                database=cfg["database"]
-            )
-        
-        print("[DB] Connected to PostgreSQL.")
+            """Connect to PostgreSQL with simple retries."""
+            import time
+            max_retries = 5
+            for i in range(max_retries):
+                try:
+                    with open(self.config_path, "r") as f:
+                        cfg = json.load(f)
+                    self.conn = psycopg2.connect(
+                        host=cfg["host"],
+                        port=cfg["port"],
+                        user=cfg["user"],
+                        password=cfg["password"],
+                        database=cfg["database"]
+                    )
+                    print("[DB] Connected to PostgreSQL.")
+                    return
+                except Exception as e:
+                    print(f"[DB] Connection failed (Attempt {i+1}/{max_retries}): {e}")
+                    time.sleep(3)
+            raise Exception("Could not connect to database after retries.")
 
     # --------------------------------------------------------------
 

@@ -53,7 +53,31 @@ RUN mkdir -p /app/unknown_faces /app/Face_images /app/logs /app/config
 # application to run without errors related to missing directories. 
 # should add or change accordingly later looking at the code structure
 
-# STEP7  setting env variables for the application
+# STEP7 Pre-download InsightFace models during build
+RUN python3 << 'EOF'
+import sys
+print("[BUILD] Downloading InsightFace models...")
+
+try:
+    from insightface.app import FaceAnalysis
+    app = FaceAnalysis(allowed_modules=['detection', 'landmark'])
+    app.prepare(ctx_id=-1, det_size=(640, 640))
+    print("[BUILD] FaceAnalysis models downloaded")
+except Exception as e:
+    print(f"[BUILD] Warning downloading FaceAnalysis: {e}", file=sys.stderr)
+
+try:
+    from insightface.model_zoo import model_zoo
+    model = model_zoo.get_model('buffalo_l')
+    model.prepare(ctx_id=-1)
+    print("[BUILD] Buffalo_l embedding model downloaded")
+except Exception as e:
+    print(f"[BUILD] Warning downloading embedding model: {e}", file=sys.stderr)
+
+print("[BUILD] Model pre-download complete!")
+EOF
+
+# STEP8  setting env variables for the application
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app
 # CPU thread optimization for ONNX Runtime

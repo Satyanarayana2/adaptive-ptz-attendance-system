@@ -17,18 +17,23 @@ services:
       - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d attendance_db"]
-      interval: 1m30s
-      timeout: 10s
+      interval: 10s
+      timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 10s
   
   app:
     build: .
     container_name: attendance_app
     # NETWORK: Allows the app to see the IP camera and DB on the same network
     network_mode: "host"
+    privileged: true
+    devices:
+      - "/dev/video0:/dev/video2"  # Adjust according to your camera device
+    restart: always
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     volumes:
       # External ACCESS: Maps your local directories into the container for logs, unknown faces, and face images
       - ./Face_images:/app/Face_images

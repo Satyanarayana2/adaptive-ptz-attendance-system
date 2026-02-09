@@ -16,6 +16,7 @@ from core.attendance_logger import AttendanceLogger
 from core.tracker import KalmanTracker
 from core.quality_selector import QualitySelector
 from core.timetable_loader import load_timetable_from_json
+from core.folder_watcher import FolderWatcher
 
 from utils.ptz.axis_camera import AxisCamera
 from utils.ptz.presets import ENTRANCE_VIEW
@@ -37,6 +38,9 @@ def main():
 
     # Database
     db = Database()
+    print("[INFO] Checking for new faces to enroll...")
+    watcher = FolderWatcher(image_dir="Face_images")
+    watcher.run()
     person_count = db.get_person_count()
 
     print(f"[INFO] Found {person_count} known persons in database.")

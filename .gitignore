@@ -131,3 +131,5 @@ tests/
 test.ipynb
 notes
 requirements.txt
+postgres_data/
+ptz-attendance-v1.tar
