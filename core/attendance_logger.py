@@ -37,21 +37,22 @@ class AttendanceLogger:
         This saves CPU by skipping embedding generation.
         """
         if track_id in self.track_recognition_cache:
-            person_id = self.track_recognition_cache[track_id]
+            person_id = self.track_recognition_cache[track_id][0]  # Get cached person_id
+            original_score = self.track_recognition_cache[track_id][1]  # Get cached score
             self.cache_hits += 1
             print(f"[CACHE HIT] Track {track_id} - - > Person {person_id} (Hits: {self.cache_hits})")
-            return person_id
+            return person_id, original_score
         else:
             self.cache_misses += 1
             print(f"[CACHE MISS] Track {track_id} - Need embedding (Misses: {self.cache_misses})")
             return None
 
-    def cache_recognition(self, track_id, person_id):
+    def cache_recognition(self, track_id, person_id, original_score=None):
         """
         Cache the recognized person for this track.
         Next frame in same track will use cached result, skipping embedding.
         """
-        self.track_recognition_cache[track_id] = person_id
+        self.track_recognition_cache[track_id] = (person_id, original_score)
         print(f"[CACHE SET] Cached Person {person_id} for Track {track_id}")
 
     # -------------------------------------------------------------
