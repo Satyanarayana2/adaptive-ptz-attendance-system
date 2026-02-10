@@ -21,6 +21,7 @@ class AttendanceLogger:
         # track_id → set of person_ids already recognized in this track
         self.recognized_tracks = {}
         
+        # {track_id: (person_id, original_score)} cache to skip embedding for already recognized tracks
         # track_id → person_id (recognition cache to skip expensive embedding)
         self.track_recognition_cache = {}
         
@@ -37,14 +38,12 @@ class AttendanceLogger:
         This saves CPU by skipping embedding generation.
         """
         if track_id in self.track_recognition_cache:
-            person_id = self.track_recognition_cache[track_id][0]  # Get cached person_id
-            original_score = self.track_recognition_cache[track_id][1]  # Get cached score
+            data = self.track_recognition_cache[track_id] # Get cached score
             self.cache_hits += 1
-            print(f"[CACHE HIT] Track {track_id} - - > Person {person_id} (Hits: {self.cache_hits})")
-            return person_id, original_score
+            print(f"[CACHE HIT] Track {track_id} - - > Person {data[0]} (Hits: {self.cache_hits})")
+            return data
         else:
-            self.cache_misses += 1
-            print(f"[CACHE MISS] Track {track_id} - Need embedding (Misses: {self.cache_misses})")
+            self.cache_misses += 1 
             return None
 
     def cache_recognition(self, track_id, person_id, original_score=None):
@@ -53,8 +52,27 @@ class AttendanceLogger:
         Next frame in same track will use cached result, skipping embedding.
         """
         self.track_recognition_cache[track_id] = (person_id, original_score)
-        print(f"[CACHE SET] Cached Person {person_id} for Track {track_id}")
+        print(f"[CACHE SET] Cached Person {person_id} for Track {track_id} with score {original_score:.2f}")
 
+    def should_log(self, track_id, person_id):
+        """
+        Check if we should log attendance for this person in this track.
+        Returns True if we should log, False if it's a duplicate within cooldown.
+        """
+        now = time.time()
+
+        # Check if this person was already recognized in this track
+        if track_id in self.recognized_tracks and person_id in self.recognized_tracks[track_id]:
+            return False
+
+        # Check cooldown for this person
+        if person_id in self.last_mark_time:
+            elapsed = now - self.last_mark_time[person_id]
+            if elapsed < self.cooldown:
+                print(f"[COOLDOWN] Skipped duplicate for person_id={person_id} (cooldown)")
+                return False
+
+        return True
     # -------------------------------------------------------------
 
     def mark_attendance(self, person_id, confidence, track_id, source="webcam", face_crop_path=None):
@@ -77,11 +95,8 @@ class AttendanceLogger:
                 return False
 
         # Check 2: Person cooldown (safety net for camera issues)
-        if person_id in self.last_mark_time:
-            elapsed = now - self.last_mark_time[person_id]
-            if elapsed < self.cooldown:
-                print(f"[ATTENDANCE] Skipped duplicate for person_id={person_id} (cooldown)")
-                return False
+        if not self.should_log(track_id, person_id):
+            return False
 
         # Log into DB
         self.db.insert_attendance(

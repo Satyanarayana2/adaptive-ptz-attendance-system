@@ -140,6 +140,9 @@ def main():
                 print(f"[DEBUG] Track {track_id} age: {track_obj.age}")
 
             x1, y1, x2, y2 = map(int, bbox)
+            h, w = frame.shape[:2]
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(w, x2), min(h, y2)
             crop = frame[y1:y2, x1:x2]
 
             if crop.size == 0:
@@ -157,14 +160,15 @@ def main():
             print(f"[DEBUG] Got best frame for track {track_id}")
 
             # Layer 1: Check if we already recognized this person in this track
-            cached_person_id = attendance_logger.get_recognized_person(track_id)
+            cached_data = attendance_logger.get_recognized_person(track_id)
             
-            if cached_person_id is not None:
+            if cached_data is not None:
+                person_id, score = cached_data
                 # Use cached result, skip expensive embedding
                 result = {
                     "matched": True,
-                    "person_id": cached_person_id[0],  # Get cached person_id
-                    "score": cached_person_id[1],  # Retrieve cached score
+                    "person_id": person_id,  # Get cached person_id
+                    "score": score,  # Retrieve cached score
                     "name": "cached",
                     "cached": True
                 }
@@ -184,19 +188,22 @@ def main():
                 # Cache the recognition if successful
                 if result["matched"]:
                     attendance_logger.cache_recognition(track_id, result["person_id"],result.get("score", None))
-                    rec_path = save_recognized_face(result["person_id"], crop)
+            rec_path = None
 
             if result["matched"]:
-                attendance_logger.mark_attendance(
-                    person_id=result["person_id"],
-                    confidence=result["score"],
-                    track_id=track_id,
-                    source=app_config.get("camera_type"),
-                    face_crop_path = rec_path
-                )
-
+                if attendance_logger.should_log(track_id, result["person_id"]):
+                    rec_path = save_recognized_face(result["person_id"], crop)
+                    # Mark attendance
+                    attendance_logger.mark_attendance(
+                        person_id=result["person_id"],
+                        confidence=result.get("score", None),
+                        track_id=track_id,
+                        source="ptz" if camera_type == "ptz" else "webcam",
+                        face_crop_path=rec_path
+                    )
+                # Visuals
                 color = (0, 255, 0)
-                label = f"{result['name']} ({result['score']:.2f})"
+                label = f"{result.get('name', 'ID'+str(result['person_id']))} ({result.get('score', 0.0):.2f})"
             else:
                 color = (0, 0, 255)
                 label = "Unknown"
