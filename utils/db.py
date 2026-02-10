@@ -71,8 +71,8 @@ class Database:
                 id SERIAL PRIMARY KEY,
                 roll_number TEXT UNIQUE NOT NULL,
                 name TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT NOW(),
-                updated_at TIMESTAMP DEFAULT NOW()
+                created_at TIME(0) DEFAULT date_trunc('minute', CURRENT_TIMESTAMP),
+                updated_at TIME(0) DEFAULT date_trunc('minute', CURRENT_TIMESTAMP)
             );
         """)
 
@@ -83,7 +83,7 @@ class Database:
                 person_id INT REFERENCES persons(id) ON DELETE CASCADE,
                 embedding VECTOR(512) NOT NULL,
                 image_ref TEXT,
-                created_at TIMESTAMP DEFAULT NOW()
+                created_at TIME(0) DEFAULT date_trunc('minute', CURRENT_TIMESTAMP)
             );
         """)
 
@@ -92,10 +92,13 @@ class Database:
             CREATE TABLE IF NOT EXISTS attendance_log (
                 id SERIAL PRIMARY KEY,
                 person_id INT REFERENCES persons(id),
-                timestamp TIMESTAMP DEFAULT NOW(),
+                date DATE DEFAULT CURRENT_DATE,
+                timestamp TIME(0) DEFAULT date_trunc('minute', CURRENT_TIMESTAMP),
                 confidence FLOAT,
+                face_crop_path TEXT,
                 track_id INT,
-                source TEXT DEFAULT 'webcam'
+                source TEXT DEFAULT 'webcam',
+                UNIQUE(person_id, date)
             );
         """)
 
@@ -214,14 +217,23 @@ class Database:
 
     # ATTENDANCE FUNCTIONS
 
-    def insert_attendance(self, person_id, confidence, track_id, source="webcam"):
+    def insert_attendance(self, person_id, confidence, track_id, source="webcam", face_crop_path=None):
         """Record attendance with metadata."""
         cur = self.conn.cursor()
 
-        cur.execute("""
-            INSERT INTO attendance_log (person_id, confidence, track_id, source)
-            VALUES (%s, %s, %s, %s);
-        """, (person_id, confidence, track_id, source))
+        query = """
+            INSERT INTO attendance_log (person_id, confidence, track_id, source, face_crop_path)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (person_id, date) DO NOTHING;
+        """
+        try:
+            cur.execute(query, (person_id, confidence, track_id, source, face_crop_path))
+            self.conn.commit()
+        except Exception as e:
+            self.conn.rollback()
+            print(f"[DB ERROR] Attendance insertion failed: {e}")
+        finally:
+            cur.close()
 
         self.conn.commit()
 

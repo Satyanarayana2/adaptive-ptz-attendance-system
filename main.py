@@ -164,7 +164,7 @@ def main():
                 result = {
                     "matched": True,
                     "person_id": cached_person_id,
-                    "score": 0.0,
+                    "score": 100.0,  # assume perfect confidence for cached results
                     "name": "cached",
                     "cached": True
                 }
@@ -184,13 +184,15 @@ def main():
                 # Cache the recognition if successful
                 if result["matched"]:
                     attendance_logger.cache_recognition(track_id, result["person_id"])
+                    save_recognized_face(result["person_id"], crop)
 
             if result["matched"]:
                 attendance_logger.mark_attendance(
                     person_id=result["person_id"],
                     confidence=result["score"],
                     track_id=track_id,
-                    source=app_config.get("camera_type")
+                    source=app_config.get("camera_type"),
+                    face_crop_path=f"recognized_faces/person{result['person_id']}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.jpg"
                 )
 
                 color = (0, 255, 0)
@@ -250,6 +252,12 @@ def main():
     print("Visit http://127.0.0.1:5000/results to see the results")
     print("=" * 60)
 
+def save_recognized_face(person_id, crop):
+    os.makedirs("recognized_faces", exist_ok=True)
+    timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"recognized_faces/person{person_id}_{timestamp_str}.jpg"
+    cv2.imwrite(filename, crop)
+    print(f"[INFO] Recognized face saved: {filename}")
 
 def save_unknown_face(track_id, crop, cooldown=10):
     os.makedirs("unknown_faces", exist_ok=True)

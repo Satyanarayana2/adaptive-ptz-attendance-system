@@ -56,7 +56,7 @@ class AttendanceLogger:
 
     # -------------------------------------------------------------
 
-    def mark_attendance(self, person_id, confidence, track_id, source="webcam"):
+    def mark_attendance(self, person_id, confidence, track_id, source="webcam", face_crop_path=None):
         """
         Marks attendance using hybrid approach:
         1. Checks if track_id already recognized this person
@@ -87,7 +87,8 @@ class AttendanceLogger:
             person_id=person_id,
             confidence=confidence,
             track_id=track_id,
-            source=source
+            source=source,
+            face_crop_path=face_crop_path
         )
 
         # Update local memory
