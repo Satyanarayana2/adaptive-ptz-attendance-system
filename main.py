@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 from utils.db import Database
 from utils.detectors.insight_detector import InsightDetector
@@ -29,6 +30,87 @@ import app as flask_app
 sys.stdout = Logger()  # Redirect print statements to both console and log file
 last_unknown_save = {}
 
+def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, app_config):
+    """
+    Worker function to process a single face in a separate thread.
+    """
+    track_id = track["track_id"]
+    bbox = track["bbox"]
+    kps = track["kps"]
+
+    # 1. Safe Cropping
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = map(int, bbox)
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(w, x2), min(h, y2)
+    crop = frame[y1:y2, x1:x2]
+
+    if crop.size == 0:
+        return None
+
+    # 2. Quality Selection
+    quality_selector.add_frame(track_id, crop, kps)
+    best = quality_selector.get_best(track_id)
+    
+    # If not enough frames yet, just return drawing info
+    if best is None:
+        return {
+            "bbox": (x1, y1, x2, y2),
+            "label": "Analyzing...",
+            "color": (255, 255, 0) # Yellow
+        }
+
+    best_crop, best_kps = best
+
+    # 3. Cache Check
+    cached_data = attendance_logger.get_recognized_person(track_id)
+    
+    if cached_data is not None:
+        person_id, score = cached_data
+        result = {
+            "matched": True,
+            "person_id": person_id,
+            "score": score,
+            "name": "Cached"
+        }
+    else:
+        # 4. Alignment & Recognition
+        try:
+            aligned = aligner.align(frame, best_kps)
+            result = recognizer.recognize(aligned)
+        except Exception:
+            result = {"matched": False}
+
+        if result["matched"]:
+            attendance_logger.cache_recognition(track_id, result["person_id"], result["score"])
+
+    # 5. Logging & Saving
+    label = "Unknown"
+    color = (0, 0, 255) # Red
+
+    if result["matched"]:
+        color = (0, 255, 0) # Green
+        label = f"ID:{result['person_id']} ({result['score']:.2f})"
+        
+        # LOGIC: Check First, Save Later
+        if attendance_logger.should_log(track_id, result["person_id"]):
+            rec_path = save_recognized_face(result["person_id"], best_crop)
+            
+            attendance_logger.mark_attendance(
+                person_id=result["person_id"],
+                confidence=result["score"],
+                track_id=track_id,
+                source=app_config.get("camera_type", "webcam"),
+                face_crop_path=rec_path
+            )
+    else:
+        save_unknown_face(track_id, best_crop)
+
+    return {
+        "bbox": (x1, y1, x2, y2),
+        "label": label,
+        "color": color
+    }
 
 
 def main():
@@ -109,6 +191,8 @@ def main():
     # checking if this is running in docker or not
     IS_DOCKER = os.path.exists("/.dockerenv")
     # Main loop
+    # Use 4 workers 
+    executor = ThreadPoolExecutor(max_workers=4)
     while True:
         if flask_app.stop_signal:
             print("[INFO] Stop signal received. Ending main loop.")
@@ -128,94 +212,27 @@ def main():
         # Clean up old tracks from recognition cache
         current_track_ids = [track["track_id"] for track in tracked_faces]
         attendance_logger.cleanup_old_tracks(current_track_ids)
-
+        # Parallelize per-track processing using ThreadPoolExecutor
+        futures = []
         for track in tracked_faces:
-            track_id = track["track_id"]
-            bbox = track["bbox"]
-            kps = track["kps"]
-
-            # Optional: Print track age if available
-            track_obj = tracker.tracks.get(track_id)
-            if track_obj:
-                print(f"[DEBUG] Track {track_id} age: {track_obj.age}")
-
-            x1, y1, x2, y2 = map(int, bbox)
-            h, w = frame.shape[:2]
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(w, x2), min(h, y2)
-            crop = frame[y1:y2, x1:x2]
-
-            if crop.size == 0:
-                print(f"[DEBUG] Empty crop for track {track_id}")
-                continue
-
-            quality_selector.add_frame(track_id, crop, kps)
-
-            best = quality_selector.get_best(track_id)
-            if best is None:
-                continue
-
-            crop, kps = best
-
-            print(f"[DEBUG] Got best frame for track {track_id}")
-
-            # Layer 1: Check if we already recognized this person in this track
-            cached_data = attendance_logger.get_recognized_person(track_id)
-            
-            if cached_data is not None:
-                person_id, score = cached_data
-                # Use cached result, skip expensive embedding
-                result = {
-                    "matched": True,
-                    "person_id": person_id,  # Get cached person_id
-                    "score": score,  # Retrieve cached score
-                    "name": "cached",
-                    "cached": True
-                }
-                print(f"[DEBUG] Using CACHED recognition for track {track_id}")
-            else:
-                # First time: do expensive alignment + embedding + recognition
-                try:
-                    aligned = aligner.align(frame, kps)
-                    print(f"[DEBUG] Aligned face for track {track_id}")
-                except Exception as e:
-                    print(f"[DEBUG] Alignment failed for track {track_id}: {e}")
-                    continue
-
-                result = recognizer.recognize(aligned)
-                print(f"[DEBUG] Recognition result for track {track_id}: matched={result['matched']}, score={result.get('score', 'N/A')}")
-                
-                # Cache the recognition if successful
-                if result["matched"]:
-                    attendance_logger.cache_recognition(track_id, result["person_id"],result.get("score", None))
-            rec_path = None
-
-            if result["matched"]:
-                if attendance_logger.should_log(track_id, result["person_id"]):
-                    rec_path = save_recognized_face(result["person_id"], crop)
-                    # Mark attendance
-                    attendance_logger.mark_attendance(
-                        person_id=result["person_id"],
-                        confidence=result.get("score", None),
-                        track_id=track_id,
-                        source="ptz" if camera_type == "ptz" else "webcam",
-                        face_crop_path=rec_path
-                    )
-                # Visuals
-                color = (0, 255, 0)
-                label = f"{result.get('name', 'ID'+str(result['person_id']))} ({result.get('score', 0.0):.2f})"
-            else:
-                color = (0, 0, 255)
-                label = "Unknown"
-                save_unknown_face(track_id, crop)
-
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(
-                frame, label,
-                (x1, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6, color, 2
+            future = executor.submit(
+                process_single_face,
+                track, frame.copy(), quality_selector, attendance_logger, aligner, recognizer, app_config
             )
+            futures.append(future)
+        # Collect results and draw on frame
+        for future in futures:
+            try:
+                data = future.result() # wait for thread to finish
+                if data:
+                    x1, y1, x2, y2 = data["bbox"]
+                    label = data["label"]
+                    color = data["color"]
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            except Exception as e:
+                print(f"[ERROR] Error processing tracked face: {e}")
+                
         # Display the resulting frame in to the Flask app
         with lock:
             flask_app.output_frame = frame.copy()

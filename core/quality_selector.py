@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 import math
 import time
+import threading
 
 class QualitySelector:
     """
@@ -24,8 +25,9 @@ class QualitySelector:
             self.max_buffer = buffer_size
         else:
             self.max_buffer = max_buffer
-
         self.min_frames = min_frames
+        self.lock = threading.Lock()
+
 
 
     # SCORE FUNCTIONS
@@ -82,14 +84,15 @@ class QualitySelector:
 
         entry = {"crop": crop, "kps": kps, "score": score}
 
-        if track_id not in self.buffers:
-            self.buffers[track_id] = []
+        with self.lock:
+            if track_id not in self.buffers:
+                self.buffers[track_id] = []
 
-        self.buffers[track_id].append(entry)
+            self.buffers[track_id].append(entry)
 
-        # Keep buffer clean
-        if len(self.buffers[track_id]) > self.max_buffer:
-            self.buffers[track_id].pop(0)
+            # Keep buffer clean
+            if len(self.buffers[track_id]) > self.max_buffer:
+                self.buffers[track_id].pop(0)
 
 
     # GET BEST FRAME
@@ -100,18 +103,19 @@ class QualitySelector:
         Returns the best crop for this ID once enough frames collected.
         After returning, the buffer for this track_id is cleared.
         """
-        if track_id not in self.buffers:
-            return None
+        with self.lock:
+            if track_id not in self.buffers:
+                return None
 
-        frames = self.buffers[track_id]
+            frames = self.buffers[track_id]
 
-        if len(frames) < self.min_frames:
-            return None  # wait for more frames
+            if len(frames) < self.min_frames:
+                return None  # wait for more frames
 
-        # Pick best by score
-        best = max(frames, key=lambda f: f["score"])
+            # Pick best by score
+            best = max(frames, key=lambda f: f["score"])
 
-        # Clear buffer after use
-        self.buffers[track_id] = []
+            # Clear buffer after use
+            self.buffers[track_id] = []
 
-        return best["crop"], best["kps"]
+            return best["crop"], best["kps"]

@@ -1,5 +1,5 @@
 # core/attendance_logger.py
-
+import threading
 import time
 
 
@@ -14,6 +14,7 @@ class AttendanceLogger:
     def __init__(self, db, cooldown_seconds=20):
         self.db = db
         self.cooldown = cooldown_seconds
+        self.lock = threading.RLock()
 
         # person_id → last_mark_timestamp
         self.last_mark_time = {}
@@ -37,22 +38,24 @@ class AttendanceLogger:
         Returns person_id if cached, None if not cached.
         This saves CPU by skipping embedding generation.
         """
-        if track_id in self.track_recognition_cache:
-            data = self.track_recognition_cache[track_id] # Get cached score
-            self.cache_hits += 1
-            print(f"[CACHE HIT] Track {track_id} - - > Person {data[0]} (Hits: {self.cache_hits})")
-            return data
-        else:
-            self.cache_misses += 1 
-            return None
+        with self.lock:
+            if track_id in self.track_recognition_cache:
+                data = self.track_recognition_cache[track_id] # Get cached score
+                self.cache_hits += 1
+                print(f"[CACHE HIT] Track {track_id} - - > Person {data[0]} (Hits: {self.cache_hits})")
+                return data
+            else:
+                self.cache_misses += 1 
+                return None
 
     def cache_recognition(self, track_id, person_id, original_score=None):
         """
         Cache the recognized person for this track.
         Next frame in same track will use cached result, skipping embedding.
         """
-        self.track_recognition_cache[track_id] = (person_id, original_score)
-        print(f"[CACHE SET] Cached Person {person_id} for Track {track_id} with score {original_score:.2f}")
+        with self.lock:
+            self.track_recognition_cache[track_id] = (person_id, original_score)
+            print(f"[CACHE SET] Cached Person {person_id} for Track {track_id} with score {original_score:.2f}")
 
     def should_log(self, track_id, person_id):
         """
@@ -60,18 +63,17 @@ class AttendanceLogger:
         Returns True if we should log, False if it's a duplicate within cooldown.
         """
         now = time.time()
-
-        # Check if this person was already recognized in this track
-        if track_id in self.recognized_tracks and person_id in self.recognized_tracks[track_id]:
-            return False
-
-        # Check cooldown for this person
-        if person_id in self.last_mark_time:
-            elapsed = now - self.last_mark_time[person_id]
-            if elapsed < self.cooldown:
-                print(f"[COOLDOWN] Skipped duplicate for person_id={person_id} (cooldown)")
+        with self.lock:
+            # Check if this person was already recognized in this track
+            if track_id in self.recognized_tracks and person_id in self.recognized_tracks[track_id]:
                 return False
 
+            # Check cooldown for this person
+            if person_id in self.last_mark_time:
+                elapsed = now - self.last_mark_time[person_id]
+                if elapsed < self.cooldown:
+                    print(f"[COOLDOWN] Skipped duplicate for person_id={person_id} (cooldown)")
+                    return False
         return True
     # -------------------------------------------------------------
 
@@ -87,36 +89,36 @@ class AttendanceLogger:
         """
 
         now = time.time()
+        with self.lock:
+            # Check 1: Is this person already recognized in this track?
+            if track_id in self.recognized_tracks:
+                if person_id in self.recognized_tracks[track_id]:
+                    print(f"[ATTENDANCE] Person {person_id} already recognized in track {track_id}")
+                    return False
 
-        # Check 1: Is this person already recognized in this track?
-        if track_id in self.recognized_tracks:
-            if person_id in self.recognized_tracks[track_id]:
-                print(f"[ATTENDANCE] Person {person_id} already recognized in track {track_id}")
+            # Check 2: Person cooldown (safety net for camera issues)
+            if not self.should_log(track_id, person_id):
                 return False
 
-        # Check 2: Person cooldown (safety net for camera issues)
-        if not self.should_log(track_id, person_id):
-            return False
+            # Log into DB
+            self.db.insert_attendance(
+                person_id=person_id,
+                confidence=confidence,
+                track_id=track_id,
+                source=source,
+                face_crop_path=face_crop_path
+            )
 
-        # Log into DB
-        self.db.insert_attendance(
-            person_id=person_id,
-            confidence=confidence,
-            track_id=track_id,
-            source=source,
-            face_crop_path=face_crop_path
-        )
+            # Update local memory
+            self.last_mark_time[person_id] = now
+            
+            # Track this person in this track
+            if track_id not in self.recognized_tracks:
+                self.recognized_tracks[track_id] = set()
+            self.recognized_tracks[track_id].add(person_id)
 
-        # Update local memory
-        self.last_mark_time[person_id] = now
-        
-        # Track this person in this track
-        if track_id not in self.recognized_tracks:
-            self.recognized_tracks[track_id] = set()
-        self.recognized_tracks[track_id].add(person_id)
-
-        print(f"[ATTENDANCE] Marked for person_id={person_id} in track {track_id}")
-        return True
+            print(f"[ATTENDANCE] Marked for person_id={person_id} in track {track_id}")
+            return True
 
     # -------------------------------------------------------------
 
@@ -128,18 +130,19 @@ class AttendanceLogger:
         Args:
             current_track_ids: Set or list of track_ids currently active
         """
-        current_set = set(current_track_ids)
-        old_tracks = set(self.recognized_tracks.keys()) - current_set
+        with self.lock:
+            current_set = set(current_track_ids)
+            old_tracks = set(self.recognized_tracks.keys()) - current_set
         
-        for track_id in old_tracks:
-            del self.recognized_tracks[track_id]
+            for track_id in old_tracks:
+                del self.recognized_tracks[track_id]
             
-            # Also clean from recognition cache
-            if track_id in self.track_recognition_cache:
-                del self.track_recognition_cache[track_id]
-                print(f"[CLEANUP] Removed track {track_id} (cached person cleared)")
-            else:
-                print(f"[CLEANUP] Removed track {track_id}")
+                # Also clean from recognition cache
+                if track_id in self.track_recognition_cache:
+                    del self.track_recognition_cache[track_id]
+                    print(f"[CLEANUP] Removed track {track_id} (cached person cleared)")
+                else:
+                    print(f"[CLEANUP] Removed track {track_id}")
 
     # -------------------------------------------------------------
 
