@@ -163,8 +163,8 @@ def main():
                 # Use cached result, skip expensive embedding
                 result = {
                     "matched": True,
-                    "person_id": cached_person_id,
-                    "score": 100.0,  # assume perfect confidence for cached results
+                    "person_id": cached_person_id[0],  # Get cached person_id
+                    "score": cached_person_id[1],  # Retrieve cached score
                     "name": "cached",
                     "cached": True
                 }
@@ -183,8 +183,8 @@ def main():
                 
                 # Cache the recognition if successful
                 if result["matched"]:
-                    attendance_logger.cache_recognition(track_id, result["person_id"])
-                    save_recognized_face(result["person_id"], crop)
+                    attendance_logger.cache_recognition(track_id, result["person_id"],result.get("score", None))
+                    rec_path = save_recognized_face(result["person_id"], crop)
 
             if result["matched"]:
                 attendance_logger.mark_attendance(
@@ -192,7 +192,7 @@ def main():
                     confidence=result["score"],
                     track_id=track_id,
                     source=app_config.get("camera_type"),
-                    face_crop_path=f"recognized_faces/person{result['person_id']}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.jpg"
+                    face_crop_path = rec_path
                 )
 
                 color = (0, 255, 0)
@@ -258,6 +258,7 @@ def save_recognized_face(person_id, crop):
     filename = f"recognized_faces/person{person_id}_{timestamp_str}.jpg"
     cv2.imwrite(filename, crop)
     print(f"[INFO] Recognized face saved: {filename}")
+    return filename
 
 def save_unknown_face(track_id, crop, cooldown=10):
     os.makedirs("unknown_faces", exist_ok=True)

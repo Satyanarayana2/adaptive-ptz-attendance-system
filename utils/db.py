@@ -222,10 +222,15 @@ class Database:
         cur = self.conn.cursor()
 
         query = """
-            INSERT INTO attendance_log (person_id, confidence, track_id, source, face_crop_path)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (person_id, date) DO NOTHING;
-        """
+                INSERT INTO attendance_log (person_id, confidence, track_id, source, face_crop_path)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (person_id, date) 
+                DO UPDATE SET 
+                    confidence = EXCLUDED.confidence,
+                    face_crop_path = EXCLUDED.face_crop_path,
+                    timestamp = EXCLUDED.timestamp
+                WHERE EXCLUDED.confidence > attendance_log.confidence;
+                """
         try:
             cur.execute(query, (person_id, confidence, track_id, source, face_crop_path))
             self.conn.commit()
