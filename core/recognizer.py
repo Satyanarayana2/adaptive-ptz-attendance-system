@@ -75,24 +75,24 @@ class Recognizer:
     # ----------------------------------------------------
 
     def _find_best_match(self, query_embedding):
-        """
-        Query PostgreSQL for the best matching person.
-        Returns: (person_id, name, roll_number, max_similarity) or None
-        """
-        cur = self.db.conn.cursor()
-        cur.execute("""
-            WITH best_per_person AS (
+            """
+            Query PostgreSQL for the single closest matching embedding.
+            Uses HNSW index for O(log N) speed.
+            """
+            cur = self.db.conn.cursor()
+            
+            # Fast Nearest Neighbor Query
+            query = """
                 SELECT p.id, p.name, p.roll_number, 
-                       MAX(1 - (fe.embedding <=> %s)) AS max_similarity
+                    (1 - (fe.embedding <=> %s)) AS similarity
                 FROM face_embeddings fe
                 JOIN persons p ON fe.person_id = p.id
-                GROUP BY p.id, p.name, p.roll_number
-            )
-            SELECT id, name, roll_number, max_similarity
-            FROM best_per_person
-            ORDER BY max_similarity DESC
-            LIMIT 1;
-        """, (query_embedding,))
-        row = cur.fetchone()
-        cur.close()
-        return row
+                ORDER BY fe.embedding <=> %s ASC
+                LIMIT 1;
+            """
+            
+            # Pass the raw query_embedding directly (no strings needed!)
+            cur.execute(query, (query_embedding, query_embedding))
+            row = cur.fetchone()
+            cur.close()
+            return row
