@@ -1,3 +1,4 @@
+import time
 from flask import Flask, Response, render_template, request
 import threading
 import cv2
@@ -17,13 +18,17 @@ def generate():
     while True:
         with lock:
             if output_frame is None:
-                continue
-            # Encode the frame as JPEG
-            (flag, encodedImage) = cv2.imencode(".jpg", output_frame)
-            if not flag:
-                continue
-        # Yield the output frame in byte format
-        yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + bytearray(encodedImage) + b'\r\n')
+                pass
+            else:
+                # Encode the frame as JPEG
+                (flag, encodedImage) = cv2.imencode(".jpg", output_frame)
+                if flag:
+                    # Yield the output fame as JPEG
+                    yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n'+ bytearray(encodedImage) + b'\r\n')
+            
+        # Sleep for 30ms outside thr lock to let the AI workers use the CPU
+        time.sleep(0.03)
+            
 
 @app.route("/")
 def index():

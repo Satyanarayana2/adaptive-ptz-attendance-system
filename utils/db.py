@@ -87,6 +87,12 @@ class Database:
             );
         """)
 
+        # Enabling HNSW for vector indexing
+        cur.execute("""
+                    CREATE INDEX IF NOT EXISTS face_embeddings_hnsw_idx ON
+                    face_embeddings USING hnsw(embedding vector_cosine_ops);
+                    """)
+
         # attendance table
         cur.execute("""
             CREATE TABLE IF NOT EXISTS attendance_log (

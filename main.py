@@ -79,6 +79,7 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
             aligned = aligner.align(frame, best_kps)
             result = recognizer.recognize(aligned)
         except Exception:
+            print(f"[ERROR] Alignment/Recognition failed for track {track_id}")
             result = {"matched": False}
 
         if result["matched"]:
