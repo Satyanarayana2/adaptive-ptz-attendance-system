@@ -125,6 +125,7 @@ config/
 *.png
 *.mp4
 *.avi
+*.tar
 logs/
 temp/
 tests/

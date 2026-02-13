@@ -1,0 +1,35 @@
+# 1. HUGE FILES (The main culprits for 5.7GB size)
+postgres_data/
+*.tar
+*.tar.gz
+*.zip
+
+# 2. MOUNTED FOLDERS 
+# These are mapped in docker-compose, so we don't need to bake them into the image.
+Face_images/
+unknown_faces/
+recognized_faces/
+logs/
+
+# 3. PYTHON GARBAGE
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# 4. NOTEBOOKS & IDE FILES
+.ipynb_checkpoints
+test.ipynb
+notes/
+.vscode/
+.idea/
+.git/
+.gitignore
+tests/
+
+# 5. DOCKER CONFIGS
+Dockerfile
+docker-compose.yml
+requirements.txt
