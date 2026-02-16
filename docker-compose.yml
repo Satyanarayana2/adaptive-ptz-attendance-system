@@ -28,8 +28,8 @@ services:
     # NETWORK: Allows the app to see the IP camera and DB on the same network
     network_mode: "host"
     privileged: true
-    devices:
-      - "/dev/video0:/dev/video2"  # Adjust according to your camera device
+    # devices:
+    #   - "/dev/video0:/dev/video2"  # Adjust according to your camera device
     restart: always
     depends_on:
       db:
@@ -41,5 +41,6 @@ services:
       - ./config:/app/config
       - ./templates:/app/templates
       - ./logs:/app/logs
+      - ./recognized_faces:/app/recognized_faces
     environment:
       - PYTHONUNBUFFERED=1

@@ -1,4 +1,4 @@
 # utils/ptz/presets.py
 
-ENTRANCE_VIEW = "EntranceView"
+ENTRANCE_VIEW = "WideLabView"
 LAB_CENTER = "LabCenter"

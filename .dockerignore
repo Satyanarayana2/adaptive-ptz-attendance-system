@@ -32,4 +32,3 @@ tests/
 # 5. DOCKER CONFIGS
 Dockerfile
 docker-compose.yml
-requirements.txt
