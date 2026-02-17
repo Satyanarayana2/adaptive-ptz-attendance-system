@@ -70,9 +70,8 @@ class Database:
             CREATE TABLE IF NOT EXISTS classes (
                 id SERIAL PRIMARY KEY,
                 batch VARCHAR(10) NOT NULL,
-                subject_code VARCHAR(20) NOT NULL,
                 section VARCHAR(5) NOT NULL,
-                CONSTRAINT unique_class_def UNIQUE (batch, subject_code, section)
+                CONSTRAINT unique_class_def UNIQUE (batch, section)
             );
         """)
 
@@ -83,7 +82,8 @@ class Database:
                 class_id INTEGER REFERENCES classes(id) ON DELETE CASCADE,
                 day_of_week INTEGER NOT NULL,
                 start_time TIME NOT NULL,
-                end_time TIME NOT NULL
+                end_time TIME NOT NULL,
+                subject_code VARCHAR(20) NOT NULL
             );
         """)
 
@@ -94,7 +94,7 @@ class Database:
                 id SERIAL PRIMARY KEY,
                 roll_number TEXT UNIQUE NOT NULL,
                 name TEXT NOT NULL,
-                class_id INTEGER REFERENCES classes(id), -- Link to Zone 1
+                class_id INTEGER REFERENCES classes(id) DEFAULT 1, -- need to remove the default after all tests are done
                 created_at TIME(0) DEFAULT date_trunc('minute', CURRENT_TIMESTAMP),
                 updated_at TIME(0) DEFAULT date_trunc('minute', CURRENT_TIMESTAMP)
             );
@@ -180,27 +180,24 @@ class Database:
                 start = entry['start_time']
                 end = entry['end_time']
 
-                # Get or Create Class ID
+                # Get or create class_id
                 cursor.execute("""
-                    INSERT INTO classes (batch, subject_code, section)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (batch, subject_code, section) 
+                    INSERT INTO classes (batch, section)
+                    VALUES (%s, %s)
+                    ON CONFLICT (batch, section)
                     DO UPDATE SET batch=EXCLUDED.batch
                     RETURNING id;
-                """, (batch, subject, section))
-                
+                """, (batch, section))
+
                 class_id_row = cursor.fetchone()
                 if not class_id_row:
-                     raise Exception(f"Database Error: Failed to get Class ID for {batch}-{section}")
+                    raise ValueError(f"Failed to get or create class for batch {batch} and section {section}.")
                 class_id = class_id_row[0]
-
-                # Insert Schedule Slot
+                # Insert schedule entry
                 cursor.execute("""
-                    INSERT INTO class_schedule (class_id, day_of_week, start_time, end_time)
-                    VALUES (%s, %s, %s, %s)
-                """, (class_id, day, start, end))
-
-                print(f"[SYNC] Linked {batch}-{section} ({subject}) to Day {day} [{start}-{end}]")
+                    INSERT INTO class_schedule (class_id, day_of_week, start_time, end_time, subject_code)
+                    VALUES (%s, %s, %s, %s, %s)""", (class_id, day, start, end, subject))
+                print(f"[SYNC] Added: {batch} {section} - {subject} on Day {day} from {start} to {end}")
 
             # --- STEP 4: COMMIT ---
             self.conn.commit()
