@@ -101,20 +101,28 @@ class Database:
         """)
 
         # 3. ZONE 3: FACE EMBEDDINGS (The Gallery)
+        try:
+            cur.execute("CREATE TYPE template_type AS ENUM ('ANCHOR', 'ADAPTIVE');")
+        except Exception:
+            self.conn.rollback()  # In case the type already exists
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS face_embeddings (
+            CREATE TABLE IF NOT EXISTS face_templates(
                 id SERIAL PRIMARY KEY,
                 person_id INT REFERENCES persons(id) ON DELETE CASCADE,
-                embedding VECTOR(512) NOT NULL,
-                image_ref TEXT,
-                created_at TIME(0) DEFAULT date_trunc('minute', CURRENT_TIMESTAMP)
-            );
+                embedding vector(512) NOT NULL,
+                type template_type DEFAULT 'ADAPTIVE',
+                -- quality & mannagement metadata
+                quality_score FLOAT, DEFAULT 0.0,
+                image_path TEXT,
+                created_at TIMESTAMP DEFAULT NOW(),
+                last_matched_at TIMESTAMP DEFAULT NOW()
+                    );
         """)
 
         # Enabling HNSW for vector indexing
         cur.execute("""
-            CREATE INDEX IF NOT EXISTS face_embeddings_hnsw_idx ON
-            face_embeddings USING hnsw(embedding vector_cosine_ops);
+            CREATE INDEX IF NOT EXISTS face_templates_hnsw_idx ON
+            face_templates USING hnsw(embedding vector_cosine_ops);
         """)
 
         # 4. ATTENDANCE LOG
@@ -127,7 +135,6 @@ class Database:
                 confidence FLOAT,
                 face_crop_path TEXT,
                 track_id INT,
-                source TEXT DEFAULT 'webcam',
                 UNIQUE(person_id, date)
             );
         """)
@@ -197,7 +204,7 @@ class Database:
                 cursor.execute("""
                     INSERT INTO class_schedule (class_id, day_of_week, start_time, end_time, subject_code)
                     VALUES (%s, %s, %s, %s, %s)""", (class_id, day, start, end, subject))
-                print(f"[SYNC] Added: {batch} {section} - {subject} on Day {day} from {start} to {end}")
+                print(f"[SYNC] Linked {batch}-{section} (ID {class_id}) to {subject} on Day {day}")
 
             # --- STEP 4: COMMIT ---
             self.conn.commit()
@@ -250,7 +257,7 @@ class Database:
         )
         return cur.fetchone()
 
-    def create_person(self, roll_number, name, class_id=None):
+    def create_person(self, roll_number, name, class_id=1):
         cur = self.conn.cursor()
         cur.execute(
             """
@@ -264,6 +271,7 @@ class Database:
         self.conn.commit()
         return person_id
     
+    # -- not sure whether this is useful or not let it be later if not used we will remove it --
     def get_or_create_person(self, roll_number, name):
         # NOTE: Updates might be needed later to handle class_id assignment
         person = self.get_person_by_roll(roll_number)
@@ -279,52 +287,88 @@ class Database:
         )
         self.conn.commit()
 
-    def insert_embedding(self, person_id, embedding, image_ref):
+    def insert_embedding(self, person_id, embedding, image_ref, type ='ADAPTIVE', quality_score=0.0):
         cur = self.conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO face_embeddings (person_id, embedding, image_ref, created_at)
-            VALUES (%s, %s, %s, NOW());
-            """,
-            (person_id, embedding.tolist(), image_ref)
-        )
-        self.conn.commit()
-    
-    def get_all_embeddings(self, class_id=None):
+        try:
+            cur.execute(
+                """
+                INSERT INTO face_templates
+                (person_id, embedding, image_ref, type, quality_score, created_at, last_matched_at)
+                VALUES (%s, %s, %s, %s, %s, NOW(), NOW());
+                """,
+                (person_id, embedding.tolist(), image_ref, type, quality_score)
+            )
+            new_id = cur.fetchone()[0]
+            self.conn.commit()
+            return new_id
+        except Exception as e:
+            self.conn.rollback()
+            print(f"[DB ERROR] Insert Template Failed: {e}")
+            return None
+        
+    def get_gallery_by_class(self, class_id):
         """
-        Retrieves embeddings. 
-        If class_id is provided (Time-Aware Mode), only returns students from that class.
+        Docstring for get_gallery_by_class
+        retrive the full gallery of a class by taking class_id as input
+        :param self: Description
+        :param class_id: Description 
         """
         cur = self.conn.cursor(cursor_factory=RealDictCursor)
-        
+        query = """
+            SELECT ft.person_id, ft.embedding, ft.type, ft.id as template_id
+            FROM face_templates ft
+            JOIN persons p ON ft.person_id = p.id
+            """
         if class_id:
-            query = """
-                SELECT 
-                    p.id AS person_id,
-                    p.name,
-                    p.roll_number,
-                    fe.embedding
-                FROM face_embeddings fe
-                JOIN persons p ON fe.person_id = p.id
-                WHERE p.class_id = %s;
-            """
-            cur.execute(query, (class_id,))
+            query += "WHERE p.class_id = %s"
+            params = (class_id,)
         else:
-            query = """
-                SELECT 
-                    p.id AS person_id,
-                    p.name,
-                    p.roll_number,
-                    fe.embedding
-                FROM face_embeddings fe
-                JOIN persons p ON fe.person_id = p.id;
-            """
-            cur.execute(query)
-            
+            params = ()
+        
+        cur.execute(query, params)
         rows = cur.fetchall()
         cur.close()
-        return rows
+        
+        gallery = {}
+        for row in rows:
+            pid = row['person_id']
+            if pid not in gallery:
+                gallery[pid] = []
+            gallery[pid].append({
+                'id': row['template_id'],
+                'embedding': row['embedding'],
+                'type': row['type']
+            })
+        return gallery
     
+    # This function will be used to update the template usage metadata after each attendance marking so that we can implement smarter template management strategies in the future (like retiring old templates, promoting good templates to anchors, etc.)
+    def update_template_usage(self, template_id):
+        cur = self.conn.cursor()
+        cur.execute("UPDATE face_templates SET last_matched_at = NOW() WHERE id = %s;", (template_id,))
+        self.conn.commit()
+    
+    def delete_poor_template(self, person_id):
+        # Deletes the worst adaptive template lowest quality or oldest ones
+        curr = self.conn.cursor()
+        try:
+            curr.execute("""
+                DELETE FROM face_templates
+                WHERE id IN (
+                    SELECT id FROM face_templates
+                    WHERE person_id = %s AND type = 'ADAPTIVE'
+                    ORDER BY quality_score ASC, last_matched_at ASC
+                    LIMIT 1
+                )
+                RETURNING image_ref;
+            """, (person_id,))
+            deleted = curr.fetchone()
+            self.conn.commit()
+            return deleted[0] if deleted else None
+        except Exception as e:
+            self.conn.rollback()
+            print(f"[DB ERROR] Delete Template Failed: {e}")
+            return None
+           
     def get_person_count(self):
         cur = self.conn.cursor()
         cur.execute("SELECT COUNT(*) FROM persons;")
@@ -335,7 +379,7 @@ class Database:
     def image_ref_exists(self, image_ref):
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT 1 FROM face_embeddings WHERE image_ref=%s LIMIT 1;",
+            "SELECT 1 FROM face_templates WHERE image_ref=%s LIMIT 1;",
             (image_ref,)
         )
         return cur.fetchone() is not None
@@ -343,7 +387,7 @@ class Database:
     def get_embeddings_by_person(self, person_id):
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT embedding FROM face_embeddings WHERE person_id=%s;",
+            "SELECT embedding FROM face_templates WHERE person_id=%s;",
             (person_id,)
         )
         rows = cur.fetchall()
@@ -353,29 +397,25 @@ class Database:
     # ATTENDANCE FUNCTIONS
     # --------------------------------------------------------------
 
-    def insert_attendance(self, person_id, confidence, track_id, source="webcam", face_crop_path=None):
-        """Record attendance with metadata. Corrected timestamp logic."""
+    def insert_attendance(self, person_id, track_id, confidence, face_crop_path = None):
         cur = self.conn.cursor()
-        
-        # Use Python timestamp to ensure DB and File sync match perfectly
         current_ts = datetime.now()
-
         query = """
-            INSERT INTO attendance_log (person_id, confidence, track_id, source, face_crop_path, timestamp)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (person_id, date) 
-            DO UPDATE SET 
+            INSERT INTO attendance_log (person_id, confidence, track_id, face_crop_path, timestamp)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (person_id, date)
+            DO UPDATE SET
                 confidence = EXCLUDED.confidence,
                 face_crop_path = EXCLUDED.face_crop_path,
                 timestamp = EXCLUDED.timestamp
             WHERE EXCLUDED.confidence > attendance_log.confidence;
         """
         try:
-            cur.execute(query, (person_id, confidence, track_id, source, face_crop_path, current_ts))
+            cur.execute(query, (person_id, confidence, track_id, face_crop_path, current_ts))
             self.conn.commit()
         except Exception as e:
             self.conn.rollback()
-            print(f"[DB ERROR] Attendance insertion failed: {e}")
+            print(f"[DB ERROR] Insert Attendance Failed: {e}")
         finally:
             cur.close()
 
