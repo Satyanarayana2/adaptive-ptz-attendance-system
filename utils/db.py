@@ -141,25 +141,37 @@ class Database:
 
     def sync_timetable(self, json_file_path):
         """
-        Syncs the database with the Lab Assistant's JSON.
-        1. Ensures all 'classes' exist.
-        2. WIPES the 'class_schedule' table and re-populates it from JSON.
+        Safely syncs the database.
+        1. Validates JSON structure first (Strict Mode).
+        2. If valid: Replaces the old schedule.
+        3. If invalid: ROLLS BACK and keeps the old schedule.
         """
         try:
             with open(json_file_path, 'r') as f:
                 timetable_data = json.load(f)
         except Exception as e:
-            print(f"[DB ERROR] Could not read timetable JSON: {e}")
+            print(f"[ERROR] Could not read JSON file: {e}")
             return
 
         cursor = self.conn.cursor()
+        required_keys = {'day_of_week', 'start_time', 'end_time', 'course_code', 'batch', 'section'}
 
         try:
-            # STEP 1: Clear the old schedule completely
-            print("[SYNC] Clearing old schedule...")
+            # --- STEP 1: PRE-VALIDATION ---
+            # Check every entry BEFORE we even start the transaction.
+            for i, entry in enumerate(timetable_data):
+                if not required_keys.issubset(entry.keys()):
+                    missing = required_keys - entry.keys()
+                    # The exact error message you requested:
+                    raise ValueError(f"Can't map the timetable you provided. (Error in Entry #{i+1}: Missing keys {missing})")
+
+            # --- STEP 2: TRANSACTION START ---
+            print("[SYNC] Validation passed. Updating schedule...")
+            
+            # Clear old schedule (Will be undone if code crashes later)
             cursor.execute("TRUNCATE TABLE class_schedule RESTART IDENTITY CASCADE;")
 
-            # STEP 2: Iterate through the new master list
+            # --- STEP 3: INGESTION ---
             for entry in timetable_data:
                 batch = entry['batch']
                 subject = entry['course_code']
@@ -168,7 +180,7 @@ class Database:
                 start = entry['start_time']
                 end = entry['end_time']
 
-                # STEP 3: Ensure the Class Exists (Upsert)
+                # Get or Create Class ID
                 cursor.execute("""
                     INSERT INTO classes (batch, subject_code, section)
                     VALUES (%s, %s, %s)
@@ -177,9 +189,12 @@ class Database:
                     RETURNING id;
                 """, (batch, subject, section))
                 
-                class_id = cursor.fetchone()[0]
+                class_id_row = cursor.fetchone()
+                if not class_id_row:
+                     raise Exception(f"Database Error: Failed to get Class ID for {batch}-{section}")
+                class_id = class_id_row[0]
 
-                # STEP 4: Insert the New Schedule Slot
+                # Insert Schedule Slot
                 cursor.execute("""
                     INSERT INTO class_schedule (class_id, day_of_week, start_time, end_time)
                     VALUES (%s, %s, %s, %s)
@@ -187,12 +202,22 @@ class Database:
 
                 print(f"[SYNC] Linked {batch}-{section} ({subject}) to Day {day} [{start}-{end}]")
 
+            # --- STEP 4: COMMIT ---
             self.conn.commit()
             print("[SUCCESS] Timetable synced successfully.")
 
-        except Exception as e:
-            print(f"[DB ERROR] Sync failed: {e}")
+        except ValueError as ve:
+            # Verification Failed (Expected Error)
             self.conn.rollback()
+            print(f"[ERROR] {ve}") 
+            print("[SAFEGUARD] Database was NOT modified. Old schedule is active.")
+
+        except Exception as e:
+            # Database/System Error (Unexpected)
+            self.conn.rollback()
+            print(f"[CRITICAL ERROR] Timetable Sync Failed! {e}")
+            print("[SAFEGUARD] Rolling back to previous schedule.")
+            
         finally:
             cursor.close()
 
