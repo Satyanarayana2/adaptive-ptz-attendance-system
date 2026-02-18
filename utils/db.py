@@ -112,7 +112,7 @@ class Database:
                 embedding vector(512) NOT NULL,
                 type template_type DEFAULT 'ADAPTIVE',
                 -- quality & mannagement metadata
-                quality_score FLOAT, DEFAULT 0.0,
+                quality_score FLOAT DEFAULT 0.0,
                 image_path TEXT,
                 created_at TIMESTAMP DEFAULT NOW(),
                 last_matched_at TIMESTAMP DEFAULT NOW()
@@ -279,6 +279,7 @@ class Database:
         )
         return cur.fetchone()
 
+    # class_id = 1 should be removed later when the class_id will be added to the person creation form in the frontend and the create_person function will be called with the correct class_id from the frontend instead of hardcoding it here
     def create_person(self, roll_number, name, class_id=1):
         cur = self.conn.cursor()
         cur.execute(
@@ -294,13 +295,14 @@ class Database:
         return person_id
     
     # -- not sure whether this is useful or not let it be later if not used we will remove it --
-    def get_or_create_person(self, roll_number, name):
+    def get_or_create_person(self, roll_number, name, class_id=1):
         # NOTE: Updates might be needed later to handle class_id assignment
         person = self.get_person_by_roll(roll_number)
         if person:
             return person[0]  # id
-        return self.create_person(roll_number, name)
+        return self.create_person(roll_number, name, class_id)
     
+    # this funciton is for updating the ID card image if a student want to change the or update the ID card image at that case we should run this fun
     def update_person_timestamp(self, person_id):
         cur = self.conn.cursor()
         cur.execute(
@@ -316,7 +318,8 @@ class Database:
                 """
                 INSERT INTO face_templates
                 (person_id, embedding, image_ref, type, quality_score, created_at, last_matched_at)
-                VALUES (%s, %s, %s, %s, %s, NOW(), NOW());
+                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                RETURNING id;
                 """,
                 (person_id, embedding.tolist(), image_ref, type, quality_score)
             )
@@ -389,7 +392,7 @@ class Database:
                     ORDER BY quality_score ASC, last_matched_at ASC
                     LIMIT 1
                 )
-                RETURNING image_ref;
+                RETURNING image_path; 
             """, (person_id,))
             deleted = curr.fetchone()
             self.conn.commit()
@@ -406,10 +409,11 @@ class Database:
         cur.close()
         return count
     
+    # whats the use, if not used should be removed later
     def image_ref_exists(self, image_ref):
         cur = self.conn.cursor()
         cur.execute(
-            "SELECT 1 FROM face_templates WHERE image_ref=%s LIMIT 1;",
+            "SELECT 1 FROM face_templates WHERE image_path=%s LIMIT 1;",
             (image_ref,)
         )
         return cur.fetchone() is not None
