@@ -224,26 +224,48 @@ class Database:
             
         finally:
             cursor.close()
-
-    def get_current_class(self):
+        
+    def get_scheduler_state(self):
         """
-        Returns the class_id active RIGHT NOW based on system time.
+        Returns a dictionary with 'current' and 'next' session details.
+        Used by SessionController to plan transitions.
         """
         now = datetime.now()
-        current_day = now.isoweekday() # 1=Mon, 7=Sun
+        current_day = now.isoweekday()
         current_time = now.time()
-
-        cur = self.conn.cursor()
+        
+        cur = self.conn.cursor(cursor_factory=RealDictCursor)
+        
+        # 1. Get CURRENT Active Session (if any)
         cur.execute("""
-            SELECT class_id FROM class_schedule 
-            WHERE day_of_week = %s 
-            AND %s BETWEEN start_time AND end_time
+            SELECT cs.class_id, c.batch, c.section, cs.start_time, cs.end_time 
+            FROM class_schedule cs
+            JOIN classes c ON cs.class_id = c.id
+            WHERE cs.day_of_week = %s 
+            AND %s BETWEEN cs.start_time AND cs.end_time
             LIMIT 1;
         """, (current_day, current_time))
+        current_session = cur.fetchone()
         
-        result = cur.fetchone()
+        # 2. Get NEXT Upcoming Session
+        # We look for the first class that starts AFTER now
+        cur.execute("""
+            SELECT cs.class_id, c.batch, c.section, cs.start_time, cs.end_time 
+            FROM class_schedule cs
+            JOIN classes c ON cs.class_id = c.id
+            WHERE cs.day_of_week = %s 
+            AND cs.start_time > %s
+            ORDER BY cs.start_time ASC
+            LIMIT 1;
+        """, (current_day, current_time))
+        next_session = cur.fetchone()
+        
         cur.close()
-        return result[0] if result else None
+        
+        return {
+            "current": current_session, # None if we are in a break
+            "next": next_session        # None if school is over for the day
+        }
 
     # --------------------------------------------------------------
     # ZONE 2 & 3 FUNCTIONS: PERSONS & EMBEDDINGS
