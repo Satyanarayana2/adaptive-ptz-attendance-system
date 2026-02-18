@@ -315,32 +315,40 @@ class Database:
         """
         cur = self.conn.cursor(cursor_factory=RealDictCursor)
         query = """
-            SELECT ft.person_id, ft.embedding, ft.type, ft.id as template_id
+            SELECT
+                ft.person_id,
+                p.name,
+                p.roll_number,
+                ft.embedding,
+                ft.type,
+                ft.id as template_id
             FROM face_templates ft
-            JOIN persons p ON ft.person_id = p.id
-            """
+            JOIN persons p ON ft.person_id = p.id;
+        """
         if class_id:
-            query += "WHERE p.class_id = %s"
+            query += " WHERE p.class_id = %s;"
             params = (class_id,)
         else:
             params = ()
-        
         cur.execute(query, params)
         rows = cur.fetchall()
         cur.close()
-        
         gallery = {}
         for row in rows:
             pid = row['person_id']
             if pid not in gallery:
-                gallery[pid] = []
-            gallery[pid].append({
+                gallery[pid] = {
+                    "name": row['name'],
+                    "roll_number": row['roll_number'],
+                    "templates": []
+                }
+            gallery[pid]['templates'].append({
                 'id': row['template_id'],
                 'embedding': row['embedding'],
                 'type': row['type']
             })
         return gallery
-    
+
     # This function will be used to update the template usage metadata after each attendance marking so that we can implement smarter template management strategies in the future (like retiring old templates, promoting good templates to anchors, etc.)
     def update_template_usage(self, template_id):
         cur = self.conn.cursor()
