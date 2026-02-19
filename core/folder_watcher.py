@@ -120,7 +120,7 @@ class FolderWatcher:
             self.db.insert_embedding(
                 person_id=person_id,
                 embedding=embedding,
-                image_ref=image_ref,
+                image_path=image_ref,
                 type="ANCHOR",
                 quality_score=1000
             )

@@ -75,13 +75,6 @@ class Database:
             );
         """)
 
-        # FALSE SAFE BLOCK
-        cur.execute("""
-                    INSERT INTO classes (id, batch, section)
-                    VALUES (1, 'DEFAULT', '0')
-                    ON CONFLICT (id) DO NOTHING;
-                    """)
-
         # The Schedule (When)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS class_schedule (
@@ -318,17 +311,17 @@ class Database:
         )
         self.conn.commit()
 
-    def insert_embedding(self, person_id, embedding, image_ref, type ='ADAPTIVE', quality_score=0.0):
+    def insert_embedding(self, person_id, embedding, image_path, type ='ADAPTIVE', quality_score=0.0):
         cur = self.conn.cursor()
         try:
             cur.execute(
                 """
                 INSERT INTO face_templates
-                (person_id, embedding, image_ref, type, quality_score, created_at, last_matched_at)
+                (person_id, embedding, image_path, type, quality_score, created_at, last_matched_at)
                 VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
                 RETURNING id;
                 """,
-                (person_id, embedding.tolist(), image_ref, type, quality_score)
+                (person_id, embedding.tolist(), image_path, type, quality_score)
             )
             new_id = cur.fetchone()[0]
             self.conn.commit()

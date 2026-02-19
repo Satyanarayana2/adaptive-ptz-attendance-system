@@ -102,7 +102,6 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
                 person_id=result["person_id"],
                 confidence=result["score"],
                 track_id=track_id,
-                source=app_config.get("camera_type", "webcam"),
                 face_crop_path=rec_path
             )
     else:
@@ -122,7 +121,7 @@ def main():
 
     # Database
     db = Database()
-    
+
     # Load timetable into DB
     db.sync_timetable(json_file_path="config/timetable.json")
     print("[INFO] Timetable data loaded into database.")
