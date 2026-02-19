@@ -52,7 +52,7 @@ class Recognizer:
             p.name,
             p.roll_number,
             ft.id AS template_id,
-            (ft.embedding <=> %s::vector) AS distance
+            (1 - (ft.embedding <=> %s::vector)) AS distance
         FROM face_templates ft
         JOIN persons p ON ft.person_id = p.id
         WHERE 
@@ -65,7 +65,7 @@ class Recognizer:
                 p.class_id = (SELECT class_id FROM current_schedule)
             )
             -- THRESHOLD LOGIC: Only consider matches closer than our threshold
-            AND (ft.embedding <=> %s::vector) <= %s
+            AND (1 - (ft.embedding <=> %s::vector)) >= %s
         ORDER BY distance ASC
         LIMIT 1;
         """
