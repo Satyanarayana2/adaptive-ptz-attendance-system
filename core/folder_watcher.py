@@ -13,6 +13,9 @@ class FolderWatcher:
 
     Reads images from a folder, detects exactly one face,
     aligns it, generates embeddings, and stores them in DB.
+    class_id is set as 1 in db side query for just time being later 
+    should add related changes to fetech the class_id according to the 
+    folder or student images file names. REMEMBER TO DO THIS AFTER TESTS.
     """
 
     def __init__(self, image_dir="Face_images"):
@@ -117,7 +120,9 @@ class FolderWatcher:
             self.db.insert_embedding(
                 person_id=person_id,
                 embedding=embedding,
-                image_ref=image_ref
+                image_ref=image_ref,
+                type="ANCHOR",
+                quality_score=1000
             )
 
             # STEP 9 — update person timestamp
