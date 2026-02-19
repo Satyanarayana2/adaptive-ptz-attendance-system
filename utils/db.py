@@ -75,6 +75,13 @@ class Database:
             );
         """)
 
+        # FALSE SAFE BLOCK
+        cur.execute("""
+                    INSERT INTO classes (id, batch, section)
+                    VALUES (1, 'DEFAULT', '0')
+                    ON CONFLICT (id) DO NOTHING;
+                    """)
+
         # The Schedule (When)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS class_schedule (
