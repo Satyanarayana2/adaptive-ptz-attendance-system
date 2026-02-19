@@ -1,101 +1,113 @@
 # core/recognizer.py
 
 import numpy as np
-
+from psycopg2.extras import RealDictCursor
 
 class Recognizer:
     """
-    Timetable-Aware Face Recognizer (In-Memory).
+    Stateless Face Recognizer.
     
     Logic:
-      1. Loads ONLY the current class's faces into RAM (reload_gallery).
-      2. Compares live face against ALL templates (Anchor + Adaptives) for those students.
-      3. Returns the MAX score (Best Match).
+      1. Generates the live embedding.
+      2. Sends it directly to the PostgreSQL database.
+      3. The DB dynamically filters by the active class schedule.
+      4. The DB performs Nearest Neighbor comparison across Anchors and Adaptives.
+      5. Returns the single Best Match.
     """
 
     def __init__(self, embedder, db, threshold=0.50):
         self.embedder = embedder
         self.db = db
-        self.threshold = threshold
-        
-        # The In-Memory Gallery
-        # Structure: { person_id: {'name': str, 'roll': str, 'templates': [vectors...]} }
-        self.known_faces = {} 
-        self.loaded_class_id = -999 # Tracks which class is currently loaded
-
-    def reload_gallery(self, class_id):
-        """
-        Called by main.py when the class changes.
-        Loads the specific student list for this schedule.
-        """
-        print(f"[RECOGNIZER] Loading Gallery for Class ID: {class_id}...")
-        
-        # Fetch from DB (using the updated function in db.py)
-        # Returns dict: { person_id: { 'name':..., 'templates': [{'embedding':...}, ...] } }
-        self.known_faces = self.db.get_gallery_by_class(class_id)
-        self.loaded_class_id = class_id
-        
-        # Stats for logs
-        student_count = len(self.known_faces)
-        total_templates = sum(len(data['templates']) for data in self.known_faces.values())
-        print(f"[RECOGNIZER] Memory Updated: {student_count} students, {total_templates} templates loaded.")
+        # Python uses Similarity (Higher is better), pgvector uses Distance (Lower is better)
+        self.similarity_threshold = threshold
+        self.distance_threshold = 1.0 - threshold
 
     def recognize(self, aligned_face):
         """
-        Compares the aligned face against the loaded in-memory gallery.
-        Uses Max-Pooling (Nearest Neighbor) strategy.
+        Compares the aligned face directly against the database using pgvector.
         """
-        # 1. Generate Embedding (Using InsightFace)
+        # 1. Generate Embedding
         live_vector = self.embedder.get_embedding(aligned_face)
         if live_vector is None:
             return self._empty_result()
 
-        # 2. In-Memory Search (Max-Pooling)
-        best_match = {
-            "person_id": None,
-            "score": 0.0,
-            "template_id": None,
-            "name": None,
-            "roll": None
-        }
-
-        # Loop through every student currently in memory
-        for person_id, data in self.known_faces.items():
-            
-            # Check against ALL their templates (Anchor + Adaptives)
-            for tmpl in data['templates']:
-                # Convert to numpy for math
-                stored_vector = np.array(tmpl['embedding'], dtype=np.float32)
-                
-                # Calculate Cosine Similarity (Dot Product since vectors are L2 normalized)
-                score = np.dot(live_vector, stored_vector)
-                
-                # Keep the highest score found so far
-                if score > best_match["score"]:
-                    best_match["score"] = score
-                    best_match["person_id"] = person_id
-                    best_match["template_id"] = tmpl['id']
-                    best_match["name"] = data['name']
-                    best_match["roll"] = data['roll']
-
-        # 3. Threshold Decision
-        if best_match["score"] >= self.threshold:
-            return {
-                "matched": True,
-                "person_id": best_match["person_id"],
-                "name": best_match["name"],
-                "score": float(best_match["score"]),
-                "matched_template_id": best_match["template_id"], # Critical for Zone 3 Logic
-                "embedding": live_vector # Return this so we can save it if it's a new adaptive face
-            }
+        # 2. Database Search Query
+        # This query perfectly mimics the old Python logic: 
+        # - It dynamically finds the active class.
+        # - If active, it filters by that class. If not active, it searches everyone.
+        # - It calculates Cosine Distance (<=>) across ALL templates (Anchor + Adaptive).
+        # - It returns the single closest match (ORDER BY distance ASC LIMIT 1).
         
-        return self._empty_result(score=best_match["score"], embedding=live_vector)
+        query = """
+        WITH current_schedule AS (
+            -- Find the currently active class_id based on day and time
+            SELECT class_id 
+            FROM class_schedule
+            WHERE day_of_week = EXTRACT(ISODOW FROM CURRENT_TIMESTAMP)
+            AND CURRENT_TIME BETWEEN start_time AND end_time
+            LIMIT 1
+        )
+        SELECT 
+            p.id AS person_id,
+            p.name,
+            p.roll_number,
+            ft.id AS template_id,
+            (ft.embedding <=> %s::vector) AS distance
+        FROM face_templates ft
+        JOIN persons p ON ft.person_id = p.id
+        WHERE 
+            -- FILTER LOGIC:
+            -- If current_schedule has a class, only match persons in that class.
+            -- If current_schedule is empty (No class running), match ALL persons.
+            (
+                (SELECT class_id FROM current_schedule) IS NULL 
+                OR 
+                p.class_id = (SELECT class_id FROM current_schedule)
+            )
+            -- THRESHOLD LOGIC: Only consider matches closer than our threshold
+            AND (ft.embedding <=> %s::vector) <= %s
+        ORDER BY distance ASC
+        LIMIT 1;
+        """
+
+        try:
+            cur = self.db.conn.cursor(cursor_factory=RealDictCursor)
+            
+            # We must pass the live_vector twice (once for the SELECT calculation, once for the WHERE filter)
+            vector_str = str(live_vector.tolist())
+            cur.execute(query, (vector_str, vector_str, self.distance_threshold))
+            
+            match = cur.fetchone()
+            cur.close()
+
+            # 3. Process Result
+            if match:
+                # Convert DB Distance back to Python Similarity
+                similarity_score = 1.0 - match['distance']
+                
+                return {
+                    "matched": True,
+                    "person_id": match['person_id'],
+                    "name": match['name'],
+                    "roll": match['roll_number'],
+                    "score": float(similarity_score),
+                    "matched_template_id": match['template_id'],
+                    "embedding": live_vector
+                }
+                
+        except Exception as e:
+            print(f"[RECOGNIZER DB ERROR] {e}")
+            self.db.conn.rollback()
+
+        # If no match found or error occurred
+        return self._empty_result(embedding=live_vector)
 
     def _empty_result(self, score=0.0, embedding=None):
         return {
             "matched": False,
             "person_id": None,
             "name": None,
+            "roll": None,
             "score": float(score),
             "matched_template_id": None,
             "embedding": embedding

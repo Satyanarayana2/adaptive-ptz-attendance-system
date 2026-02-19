@@ -4,7 +4,6 @@ import time
 import json
 import os
 import sys
-import schedule
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
@@ -31,12 +30,6 @@ import app as flask_app
 sys.stdout = Logger()  # Redirect print statements to both console and log file
 last_unknown_save = {}
 
-# using a simple class so the scheduled job can update the values of the next session and current session in the main loop
-class SystemState:
-    def __init__(self):
-        self.current_class_id = -999
-
-state = SystemState()
 
 def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, app_config):
     """
@@ -58,7 +51,7 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
 
     # 2. Quality Selection
     quality_selector.add_frame(track_id, crop, kps)
-    best = quality_selector.get_best(track_id)
+    best = quality_selector.get_best(track_id) # should update to return the score in future if needed for logging or decision making
     
     # If not enough frames yet, just return drawing info
     if best is None:
@@ -82,9 +75,10 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
             "name": "Cached"
         }
     else:
-        # 4. Alignment & Recognition
+        # 4. Alignment & Recognition (fully stateless, via DB query)
         try:
             aligned = aligner.align(frame, best_kps)
+            # recognizer itself calls the embedder to get vector, then does the DB query to get the match
             result = recognizer.recognize(aligned)
         except Exception:
             print(f"[ERROR] Alignment/Recognition failed for track {track_id}")
@@ -199,27 +193,6 @@ def main():
     
     # checking if this is running in docker or not
     IS_DOCKER = os.path.exists("/.dockerenv")
-    # schedule job to check for timetable updates every minute
-    def check_timetable():
-        schedule_data = db.get_scheduler_state()
-        active_session = schedule_data['current']
-        next_session = schedule_data['next']
-
-        target_class_id = active_session['class_id'] if active_session else None
-        if target_class_id != state.current_class_id:
-            print(f"[SCHEDULE CHECK] Detected class change. New class_id: {target_class_id}")
-            if target_class_id:
-                recognizer.reload_gallery(target_class_id)
-                if camera_type == "ptz":
-                    camera.goto_preset(ENTRANCE_VIEW)
-            else:
-                # here it should fall back to check the detected faces in the db itself not in local memory, but for simplicity we will just clear the memory
-                recognizer.reload_gallery(None)  # Clear memory when no active class
-                if camera_type == "ptz":
-                    camera.goto_preset(ENTRANCE_VIEW)
-            state.current_class_id = target_class_id
-        check_timetable()
-    schedule.every(1).minutes.do(check_timetable)
     # Main loop
     # Use 4 workers 
     executor = ThreadPoolExecutor(max_workers=4)
