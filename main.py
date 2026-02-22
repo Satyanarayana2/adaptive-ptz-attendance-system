@@ -1,4 +1,5 @@
 import threading
+import uvicorn
 import cv2
 import time
 import json
@@ -23,9 +24,9 @@ from utils.ptz.axis_camera import AxisCamera
 from utils.ptz.presets import ENTRANCE_VIEW
 from utils.logs import Logger
 
-# Import Flask app and shared state
+# Import FastAPI app and shared state
 from app import app, lock
-import app as flask_app
+import app as web_app
 
 sys.stdout = Logger()  # Redirect print statements to both console and log file
 last_unknown_save = {}
@@ -199,10 +200,13 @@ def main():
                 return
     
     # Start Flask server in a background thread (non-daemon so it survives after AI loop stops)
-    flask_thread = threading.Thread(target=lambda: app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False), daemon=False)
-    flask_thread.start()
-    print("[INFO] Flask server started on http://0.0.0.0:5000")
-    time.sleep(2)  # Give Flask time to start
+    api_thread = threading.Thread(
+        target = lambda: uvicorn.run(app, host='0.0.0.0', port = 5000, log_level="warning"),
+        daemon=False
+    )
+    api_thread.start()
+    print("[INFO] FastAPI server started on http://0.0.0.0:5000")
+    time.sleep(2)
     
     # checking if this is running in docker or not
     IS_DOCKER = os.path.exists("/.dockerenv")
@@ -210,7 +214,7 @@ def main():
     # Use 4 workers 
     executor = ThreadPoolExecutor(max_workers=4)
     while True:
-        if flask_app.stop_signal:
+        if web_app.stop_signal:
             print("[INFO] Stop signal received. Ending main loop.")
             break
 
@@ -251,17 +255,17 @@ def main():
                 
         # Display the resulting frame in to the Flask app
         with lock:
-            flask_app.output_frame = frame.copy()
+            web_app.output_frame = frame.copy()
         if not IS_DOCKER:
             cv2.imshow("Attendance System", frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
-                flask_app.stop_signal = True
+                web_app.stop_signal = True
             
     
     # Print final cache statistics
     stats = attendance_logger.get_cache_stats()
 
-    flask_app.final_results = {
+    web_app.final_results = {
         "timestamp": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
         "cache_hits": stats["cache_hits"],
         "cache_misses": stats["cache_misses"],

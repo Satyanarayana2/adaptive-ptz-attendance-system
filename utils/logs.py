@@ -17,3 +17,8 @@ class Logger(object):
     def flush(self):
         self.terminal.flush()
         self.log.flush()
+    
+    def isatty(self):
+        if hasattr(self.terminal, 'isatty'):
+            return self.terminal.isatty()
+        return False
