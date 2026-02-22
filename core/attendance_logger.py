@@ -32,7 +32,7 @@ class AttendanceLogger:
 
     # -------------------------------------------------------------
 
-    def get_recognized_person(self, track_id):
+    def check_cache(self, track_id):
         """
         Check if person was already recognized in this track.
         Returns person_id if cached, None if not cached.

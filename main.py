@@ -63,7 +63,7 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
     best_crop, best_kps = best
 
     # 3. Cache Check
-    cached_data = attendance_logger.get_recognized_person(track_id)
+    cached_data = attendance_logger.check_cache(track_id)
     
     if cached_data is not None:
         person_id, score = cached_data
