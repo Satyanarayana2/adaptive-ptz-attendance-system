@@ -31,7 +31,7 @@ sys.stdout = Logger()  # Redirect print statements to both console and log file
 last_unknown_save = {}
 
 
-def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, app_config):
+def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, adaptive_manager):
     """
     Worker function to process a single face in a separate thread.
     """
@@ -233,7 +233,7 @@ def main():
         for track in tracked_faces:
             future = executor.submit(
                 process_single_face,
-                track, frame.copy(), quality_selector, attendance_logger, aligner, recognizer, app_config, adaptive_manager
+                track, frame.copy(), quality_selector, attendance_logger, aligner, recognizer, adaptive_manager
             )
             futures.append(future)
         # Collect results and draw on frame

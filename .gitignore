@@ -121,6 +121,7 @@ dmypy.json
 Face_images/
 unknown_faces/
 config/
+adaptive_faces/
 *.jpg
 *.png
 *.mp4

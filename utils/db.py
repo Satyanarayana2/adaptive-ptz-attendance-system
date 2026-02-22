@@ -473,7 +473,7 @@ class Database:
                 cur.execute("UPDATE face_templates SET image_path = %s WHERE id = %s;",(image_path, new_id))
                 self.conn.commit()
 
-                print(f"[DB ADAPTIVE] Created new pose slot {new_id} for person {person_id} (Slot {len(existing_adaptives)+1/{max_slots}})")
+                print(f"[DB ADAPTIVE] Created new pose slot {new_id} for person {person_id} (Slot {len(existing_adaptives)+1}/{max_slots})")
                 return {"action":"INSERT", "image_path": image_path}
             
             # 3 - slot are full exactly max_slots adaptives mean

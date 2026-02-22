@@ -10,6 +10,7 @@ Face_images/
 unknown_faces/
 recognized_faces/
 logs/
+adaptive_faces/
 
 # 3. PYTHON GARBAGE
 __pycache__/
