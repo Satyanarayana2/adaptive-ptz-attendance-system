@@ -17,6 +17,7 @@ from core.attendance_logger import AttendanceLogger
 from core.tracker import KalmanTracker
 from core.quality_selector import QualitySelector
 from core.folder_watcher import FolderWatcher
+from core.adaptive_manager import AdaptiveManager
 
 from utils.ptz.axis_camera import AxisCamera
 from utils.ptz.presets import ENTRANCE_VIEW
@@ -30,7 +31,7 @@ sys.stdout = Logger()  # Redirect print statements to both console and log file
 last_unknown_save = {}
 
 
-def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, app_config):
+def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, app_config):
     """
     Worker function to process a single face in a separate thread.
     """
@@ -104,6 +105,15 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
                 track_id=track_id,
                 face_crop_path=rec_path
             )
+        # adaptive learning of domain face embeddings - only trigger if archface actually generated embedding not from cache miss
+        if "embedding" in result and result["embedding"] is not None:
+            adaptive_manager.process(
+                person_id = result["person_id"],
+                crop = best_crop,
+                kps = best_kps,
+                embedding = result["embedding"],
+                sim_score = result["score"]
+            )
     else:
         save_unknown_face(track_id, best_crop)
 
@@ -159,6 +169,10 @@ def main():
     attendance_logger = AttendanceLogger(db, cooldown_seconds=app_config["cooldown_seconds"]) 
     # cooldown period is a duration in seconds during which
     # repeated attendance logs for the same person are ignored
+    # intializing Adaptive Manager module
+    adaptive_manager = AdaptiveManager(
+        config=app_config["adaptive_gallery"], db=db, 
+    )
 
     # Camera connection
 
@@ -219,7 +233,7 @@ def main():
         for track in tracked_faces:
             future = executor.submit(
                 process_single_face,
-                track, frame.copy(), quality_selector, attendance_logger, aligner, recognizer, app_config
+                track, frame.copy(), quality_selector, attendance_logger, aligner, recognizer, app_config, adaptive_manager
             )
             futures.append(future)
         # Collect results and draw on frame

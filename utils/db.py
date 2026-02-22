@@ -435,7 +435,7 @@ class Database:
 
     # --------------------------------------------------------------
 
-    def smart_adaptive_update(self, person_id, new_embedding, img_path, quality_score, max_slots = 3):
+    def smart_adaptive_update(self, person_id, new_embedding, quality_score, max_slots=3):
         """
         Docstring for smart_adaptive_update
         
@@ -464,31 +464,36 @@ class Database:
             # 2 - if that person_id doesn't have adaptive vectors inside or less than the max_slots if slots are full the code will be check with similarity 
             if len(existing_adaptives) < max_slots:
                 cur.execute("""
-                        INSERT INTO face_templates (person_id, embedding, image_path, quality_score, created_at, last_matched_at)
-                        VALUES (%s, %s, %s, 'ADAPTIVE', %s, NOW(), NOW())
+                        INSERT INTO face_templates (person_id, embedding, type, quality_score, created_at, last_matched_at)
+                        VALUES (%s, %s, 'ADAPTIVE', %s, NOW(), NOW())
                         RETURNING id;
-                            """, (person_id, vector_str, img_path, quality_score))
+                            """, (person_id, vector_str, quality_score))
                 new_id = cur.fetchone()['id']
+                image_path = f"adaptive_faces/person_{person_id}_slot_{new_id}.jpg"
+                cur.execute("UPDATE face_templates SET image_path = %s WHERE id = %s;",(image_path, new_id))
                 self.conn.commit()
+
                 print(f"[DB ADAPTIVE] Created new pose slot {new_id} for person {person_id} (Slot {len(existing_adaptives)+1/{max_slots}})")
-                return {"action":"INSERT", "slot_id":new_id, "old_image_path":None}
+                return {"action":"INSERT", "image_path": image_path}
             
             # 3 - slot are full exactly max_slots adaptives mean
             closest_slot = existing_adaptives[0]
 
             # 4 - Quality check for updation 
             if quality_score > closest_slot['quality_score']:
+                slot_id = closest_slot['id']
+                image_path = f"adaptive_faces/person_{person_id}_slot_{slot_id}.jpg"
                 cur.execute("""
                         UPDATE face_templates
                         SET embedding = %s, image_path = %s, quality_score = %s, last_matched_at = NOW()
                         WHERE id = %s;
-                            """,(vector_str, img_path, quality_score, closest_slot['id']))
+                            """,(vector_str, image_path, quality_score, slot_id))
                 self.conn.commit()
                 print(f"[DB ADAPTIVE] Upgraded pose slot {closest_slot['id']} for person {person_id} (Quality: {closest_slot['quality_score']:.1f} -> {quality_score:.1f})")
-                return {"action":"UPDATE", "slot_id":closest_slot['id'], "old_image_path":closest_slot['image_path']}
+                return {"action": "UPDATE", "image_path": image_path}
             else:
                 print(f"[DB ADAPTIVE] Skipped. Existing pose is sharper")
-                return {"action":"SKIPPED", "slot_id":closest_slot['id'], "old_image_path":None}
+                return {"action":"SKIPPED"}
         except Exception as e:
             self.conn.rollback()
             print(f"[DB Error] Smart Adaptive update failed: {e}")
