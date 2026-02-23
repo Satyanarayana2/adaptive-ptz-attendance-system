@@ -13,7 +13,7 @@ class SessionController:
         self.db = db
         self.ptz = ptz
         self.adaptive_manager = adaptive_manager
-        self.tracker = tracker  # <-- Injecting the Tracker to clear it on moves
+        self.tracker = tracker 
         
         self.current_session = None
         self.next_session = None

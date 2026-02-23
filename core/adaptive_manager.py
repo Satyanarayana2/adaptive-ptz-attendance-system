@@ -13,6 +13,7 @@ class AdaptiveManager:
         self.db = db
         self.lock = threading.Lock()
         self.save_dir = self.config.get("save_dir", "adaptive_faces")
+        self.learning_enabled = True
         os.makedirs(self.save_dir, exist_ok=True)
     
     def set_learning_mode(self, enabled):
@@ -29,7 +30,7 @@ class AdaptiveManager:
         return math.hypot(left_eye[0] - right_eye[0], left_eye[1] - right_eye[1])
 
     def process(self, person_id, crop, kps, embedding, sim_score):
-        if not self.config.get("enabled", True):
+        if not self.config.get("enabled", True) or not self.learning_enabled:
             return
 
         # 1. Calculate Live Physics internally
