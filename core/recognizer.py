@@ -37,11 +37,14 @@ class Recognizer:
             (1 - (ft.embedding <=> %s::vector)) AS similarity
         FROM face_templates ft
         JOIN persons p ON ft.person_id = p.id
+        JOIN classes c ON p.class_id = c.id
         WHERE 
             (
                 (SELECT class_id FROM current_schedule) IS NULL 
                 OR 
                 p.class_id = (SELECT class_id FROM current_schedule)
+                OR
+                c.batch = 'STAFF'
             )
             -- Apply SIMILARITY threshold directly (e.g., 0.35)
             AND (1 - (ft.embedding <=> %s::vector)) >= %s

@@ -224,6 +224,24 @@ class Database:
             
         finally:
             cursor.close()
+
+    def get_or_create_class(self, batch, section):
+        cur = self.conn.cursor()
+        try:
+            cur.execute("""
+                INSERT INTO classes (batch, section)
+                VALUES (%s, %s)
+                ON CONFLICT (batch, section)
+                DO UPDATE SET batch = EXCLUDED.batch
+                RETURNING id;
+                        """, (batch, section))
+            class_id = cur.fetchone()[0]
+            self.conn.commit()
+            return class_id
+        except Exception as e:
+            self.conn.rollback()
+            print(f"[DB ERROR] failed to get or create class {batch}-{section}: {e}")
+            return 1 # falling back to class 1 if error 
         
     def get_scheduler_state(self):
         """
