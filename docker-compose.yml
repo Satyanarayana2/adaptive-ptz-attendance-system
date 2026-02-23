@@ -42,5 +42,6 @@ services:
       - ./templates:/app/templates
       - ./logs:/app/logs
       - ./recognized_faces:/app/recognized_faces
+      - ./adaptive_faces:/app/adaptive_faces
     environment:
       - PYTHONUNBUFFERED=1

@@ -1,121 +1,88 @@
 import time
 from datetime import datetime
+from utils.ptz.presets import ENTRANCE_VIEW, WIDE_VIEW, RIGHT_CORNER_VIEW
 
 class SessionController:
     """
     The State Manager (Brain).
-    Holds 'Current' and 'Next' session to manage transitions smoothly.
+    Handles PTZ movement, toggles Adaptive Learning, and RESETS the Tracker on movement.
     """
-    
-    # PTZ Configuration
     ENTRY_BUFFER_MINUTES = 15  # First 15 mins: Watch Entrance
-    SCAN_INTERVAL_SECONDS = 120 # Every 2 mins: Rotate Row View
-    SCAN_PRESETS = ["ROW_1", "ROW_2", "ROW_3", "ROW_4", "CLASS_OVERVIEW"]
 
-    def __init__(self, db, ptz, recognizer):
+    def __init__(self, db, ptz, adaptive_manager, tracker):
         self.db = db
         self.ptz = ptz
-        self.recognizer = recognizer
+        self.adaptive_manager = adaptive_manager
+        self.tracker = tracker  # <-- Injecting the Tracker to clear it on moves
         
-        # --- THE STATE MEMORY ---
         self.current_session = None
         self.next_session = None
-        self.state = "UNKNOWN" # IDLE, ENTRY, SCAN
-        
-        # Timers
-        self.scan_index = 0
-        self.last_move_time = 0
+        self.state = "UNKNOWN"
 
     def update(self):
-        """
-        Called every frame. Refreshes state and decides action.
-        """
-        # 1. Refresh Knowledge (Get Current & Next)
+        """Called every frame. Refreshes state and decides action."""
         schedule = self.db.get_scheduler_state()
         new_current = schedule['current']
-        self.next_session = schedule['next'] # Store for future logic (e.g. countdowns)
+        self.next_session = schedule['next']
 
-        # 2. Detect State Change
-        # Case A: We entered a NEW class
+        # Class just started (or an Overlap triggered a new class)
         if new_current and (self.current_session is None or new_current['class_id'] != self.current_session['class_id']):
-            print(f"[CONTROLLER] Session Started: {new_current['batch']}")
-            self.transition_to_class(new_current)
+            print(f"[CONTROLLER] Session Started: {new_current['batch']}-{new_current['section']}")
+            self.current_session = new_current
+            self.state = "UNKNOWN" # Force state re-evaluation
 
-        # Case B: We exited a class (Current is None, but we had one before)
+        # Class just ended
         elif new_current is None and self.current_session is not None:
             print("[CONTROLLER] Session Ended. Switching to IDLE.")
             self.transition_to_idle()
 
-        # Update our memory
         self.current_session = new_current
 
-        # 3. Execute Continuous Logic
         if self.current_session:
             self.handle_class_logic()
-        else:
-            self.handle_idle_logic()
-
-    def transition_to_class(self, session):
-        """Setup for a new class."""
-        self.current_session = session
-        
-        # 1. Load Students for this class
-        self.recognizer.reload_gallery(session['class_id'])
-        
-        # 2. Reset to Entry Mode
-        self.state = "ENTRY"
-        self.ptz.goto_preset("ENTRANCE_VIEW")
-        print(f"[CONTROLLER] Mode: ENTRY (Next class is: {self.next_session['batch'] if self.next_session else 'None'})")
 
     def transition_to_idle(self):
         """Reset for break/end of day."""
-        self.state = "IDLE"
-        
-        # 1. Unload Students (Security Mode)
-        self.recognizer.reload_gallery(None)
-        
-        # 2. Watch Door
-        self.ptz.goto_preset("ENTRANCE_VIEW")
-
+        self.current_session = None
+        self._change_state("IDLE", ENTRANCE_VIEW, enable_learning=True)
         if self.next_session:
-            start = self.next_session['start_time']
-            print(f"[CONTROLLER] Idle Mode. Next class starts at {start}.")
+            print(f"[CONTROLLER] Idle Mode. Next class starts at {self.next_session['start_time']}.")
+
+    def _change_state(self, new_state, preset_name, enable_learning):
+        """Helper to safely change physical camera state and reset tracking"""
+        if self.state != new_state:
+            print(f"[CONTROLLER] Phase changed to {new_state}. Learning: {enable_learning}")
+            self.state = new_state
+            
+            # 1. Toggle learning
+            self.adaptive_manager.set_learning_mode(enable_learning)
+            
+            # 2. CLEAR THE TRACKER! (Prevents bounding boxes from jumping across the room)
+            if self.tracker:
+                self.tracker.tracks.clear()
+                
+            # 3. Move camera
+            if self.ptz:
+                self.ptz.goto_preset(preset_name)
 
     def handle_class_logic(self):
-        """Decides: Watch Door (Entry) OR Scan Rows."""
+        """Decides: Watch Door (Entry) OR Alternate Scan (Wide/Corner)."""
         now = datetime.now()
         start_time = datetime.combine(now.date(), self.current_session['start_time'])
-        elapsed_mins = (now - start_time).total_seconds() / 60
+        
+        elapsed_mins = (now - start_time).total_seconds() / 60.0
 
         # Phase 1: Entry (0-15 mins)
         if elapsed_mins <= self.ENTRY_BUFFER_MINUTES:
-            if self.state != "ENTRY":
-                self.state = "ENTRY"
-                self.ptz.goto_preset("ENTRANCE_VIEW")
-        
-        # Phase 2: Row Scan (15 mins - End)
+            self._change_state("ENTRY", ENTRANCE_VIEW, enable_learning=True)
+
+        # Phase 2: Alternating Scan (15 mins -> End of Class)
         else:
-            if self.state != "SCAN":
-                self.state = "SCAN"
-                self.scan_index = 0
-                self.last_move_time = 0 # Move immediately
+            scan_time_mins = elapsed_mins - self.ENTRY_BUFFER_MINUTES
             
-            self._process_scan_rotation()
-
-    def handle_idle_logic(self):
-        """Logic for breaks (optional GrandTour here)."""
-        # For now, just hold the entrance view
-        pass
-
-    def _process_scan_rotation(self):
-        """Cycles through presets."""
-        if not self.ptz: return
-        now = time.time()
-        
-        if now - self.last_move_time > self.SCAN_INTERVAL_SECONDS:
-            preset = self.SCAN_PRESETS[self.scan_index]
-            print(f"[CONTROLLER]  Row Scan: Moving to {preset}")
-            self.ptz.goto_preset(preset)
-            
-            self.last_move_time = now
-            self.scan_index = (self.scan_index + 1) % len(self.SCAN_PRESETS)
+            # Modulo 10 gives us a repeating 10-minute cycle. 
+            # 0 to 4.99 = Wide View. 5 to 9.99 = Corner View.
+            if (scan_time_mins % 10) < 5:
+                self._change_state("SCAN_WIDE", WIDE_VIEW, enable_learning=False)
+            else:
+                self._change_state("SCAN_CORNER", RIGHT_CORNER_VIEW, enable_learning=False)

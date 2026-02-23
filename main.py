@@ -19,6 +19,7 @@ from core.tracker import KalmanTracker
 from core.quality_selector import QualitySelector
 from core.folder_watcher import FolderWatcher
 from core.adaptive_manager import AdaptiveManager
+from core.session_controller import SessionController
 
 from utils.ptz.axis_camera import AxisCamera
 from utils.ptz.presets import ENTRANCE_VIEW
@@ -187,8 +188,6 @@ def main():
         )
 
         if camera.connect():
-            camera.goto_preset(ENTRANCE_VIEW)
-            time.sleep(5)  # wait for PTZ to move
             camera.open_stream()
             print("[INFO] PTZ camera stream ready")
         else:
@@ -199,6 +198,9 @@ def main():
                 print("[ERROR] Unable to open webcam. Exiting.")
                 return
     
+    # this module is for making the ptz movements accordingly to the time_table session
+    session_controller = SessionController(db=db, ptz=camera if camera_type == "ptz" else None, adaptive_manager=adaptive_manager, tracker=tracker)
+
     # Start Flask server in a background thread (non-daemon so it survives after AI loop stops)
     api_thread = threading.Thread(
         target = lambda: uvicorn.run(app, host='0.0.0.0', port = 5000, log_level="warning"),
@@ -217,7 +219,7 @@ def main():
         if web_app.stop_signal:
             print("[INFO] Stop signal received. Ending main loop.")
             break
-
+        session_controller.update()
         ret, frame = camera.read() # for PTZ camera, use read_frame() method
         if not ret:
             continue

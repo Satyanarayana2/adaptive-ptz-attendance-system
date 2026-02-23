@@ -23,6 +23,9 @@ class AxisCamera:
 
         self.auth = HTTPDigestAuth(username, password)
         self.cap = None
+        
+        # FIXED: Initialize fail_count to prevent crash in read_frame
+        self.fail_count = 0
 
 
     # Connection
@@ -86,18 +89,18 @@ class AxisCamera:
 
     # PTZ Controls
 
-    def goto_preset(self, preset_name):
-        """Move camera to a named server preset."""
-        print(f"[PTZ] Moving to preset: {preset_name}")
+    def goto_preset(self, preset_name, speed=100):
+        """Move camera to a named server preset with custom speed."""
+        print(f"[PTZ] Moving to preset: {preset_name} at speed: {speed}")
         try:
             resp = requests.get(
                 self.ptz_url,
-                params={"gotoserverpresetname": preset_name},
+                params={"gotoserverpresetname": preset_name, "speed": speed},
                 auth=self.auth,
                 timeout=self.timeout
             )
             resp.raise_for_status()
-            time.sleep(2)  # allow camera to settle
+            time.sleep(1)  # Reduced settle time with fast speed
         except Exception as e:
             print(f"[PTZ][ERROR] Preset move failed: {e}")
 

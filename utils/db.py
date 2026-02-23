@@ -263,6 +263,7 @@ class Database:
             JOIN classes c ON cs.class_id = c.id
             WHERE cs.day_of_week = %s 
             AND %s BETWEEN cs.start_time AND cs.end_time
+            ORDER BY cs.start_time DESC
             LIMIT 1;
         """, (current_day, current_time))
         current_session = cur.fetchone()
