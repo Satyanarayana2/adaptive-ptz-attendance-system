@@ -220,7 +220,7 @@ def main():
             print("[INFO] Stop signal received. Ending main loop.")
             break
         session_controller.update()
-        ret, frame = camera.read() # for PTZ camera, use read_frame() method
+        ret, frame = camera.read_frame() if camera_type == "ptz" else camera.read()
         if not ret:
             continue
 

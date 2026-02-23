@@ -14,6 +14,10 @@ class AdaptiveManager:
         self.lock = threading.Lock()
         self.save_dir = self.config.get("save_dir", "adaptive_faces")
         os.makedirs(self.save_dir, exist_ok=True)
+    
+    def set_learning_mode(self, enabled):
+        """Allows SessionController to toggle learning on/off based on PTZ view"""
+        self.learning_enabled = enabled
 
     def _calculate_sharpness(self, img):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
