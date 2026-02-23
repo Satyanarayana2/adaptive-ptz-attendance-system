@@ -99,10 +99,12 @@ class Database:
                 updated_at TIME(0) DEFAULT date_trunc('minute', CURRENT_TIMESTAMP)
             );
         """)
+        self.conn.commit()
 
         # 3. ZONE 3: FACE EMBEDDINGS (The Gallery)
         try:
             cur.execute("CREATE TYPE template_type AS ENUM ('ANCHOR', 'ADAPTIVE');")
+            self.conn.commit()
         except Exception:
             self.conn.rollback()  # In case the type already exists
         cur.execute("""
