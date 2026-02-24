@@ -32,7 +32,7 @@ class SessionController:
             self.state = "UNKNOWN" # Force state re-evaluation
 
         # Class just ended
-        elif new_current is None and self.current_session is not None:
+        elif new_current is None and (self.current_session is not None or self.state == "UNKNOWN"):
             print("[CONTROLLER] Session Ended. Switching to IDLE.")
             self.transition_to_idle()
 
