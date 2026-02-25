@@ -211,7 +211,7 @@ def main():
         daemon=False
     )
     api_thread.start()
-    print("[INFO] FastAPI server started on http://0.0.0.0:5000")
+    print("[INFO] FastAPI server started on http://127.0.0.1:5000")
     time.sleep(2)
     
     # checking if this is running in docker or not
@@ -239,7 +239,7 @@ def main():
         # Clean up old tracks from recognition cache
         current_track_ids = [track["track_id"] for track in tracked_faces]
         attendance_logger.cleanup_old_tracks(current_track_ids)
-        # Parallelize per-track processing using ThreadPoolExecutor
+        # concurrently running per-track processing using ThreadPoolExecutor
         futures = []
         for track in tracked_faces:
             future = executor.submit(
@@ -261,6 +261,14 @@ def main():
                 print(f"[ERROR] Error processing tracked face: {e}")
                 
         # Display the resulting frame in to the Flask app
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (5, 5), (320, 110), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+        cv2.putText(frame, f"SYSTEM PHASE: {session_controller.state}", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        cv2.putText(frame, f"TRACKING: {len(tracked_faces)} Faces", (15, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        active_cache = attendance_logger.get_cache_stats()["active_cached_tracks"]
+        cv2.putText(frame, f"CACHE ACTIVE: {active_cache}", (15, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
         with lock:
             web_app.output_frame = frame.copy()
         if not IS_DOCKER:
