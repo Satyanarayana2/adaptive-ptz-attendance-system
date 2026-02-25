@@ -33,7 +33,7 @@ sys.stdout = Logger()  # Redirect print statements to both console and log file
 last_unknown_save = {}
 
 
-def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, adaptive_manager):
+def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, current_phase):
     """
     Worker function to process a single face in a separate thread.
     """
@@ -66,7 +66,10 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
     best_crop, best_kps = best
 
     # 3. Cache Check
-    cached_data = attendance_logger.check_cache(track_id)
+    if current_phase == "ENTRY":
+        cached_data = None
+    else:
+        cached_data = attendance_logger.check_cache(track_id)
     
     if cached_data is not None:
         person_id, score = cached_data
@@ -240,7 +243,7 @@ def main():
         for track in tracked_faces:
             future = executor.submit(
                 process_single_face,
-                track, frame.copy(), quality_selector, attendance_logger, aligner, recognizer, adaptive_manager
+                track, frame.copy(), quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, session_controller.state
             )
             futures.append(future)
         # Collect results and draw on frame

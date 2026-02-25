@@ -7,7 +7,7 @@ class SessionController:
     The State Manager (Brain).
     Handles PTZ movement, toggles Adaptive Learning, and RESETS the Tracker on movement.
     """
-    ENTRY_BUFFER_MINUTES = 15  # First 15 mins: Watch Entrance
+    ENTRY_BUFFER_MINUTES = 30  # Watch Entrance for the first 30 mins
 
     def __init__(self, db, ptz, adaptive_manager, tracker):
         self.db = db

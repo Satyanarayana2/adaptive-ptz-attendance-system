@@ -69,9 +69,23 @@ class QualitySelector:
 
     def add_frame(self, track_id, crop, kps):
         """
-        Stores crop + score for this track_id.
+        Stores crop + score for this track_id if it passes few data-driven gates.
         """
+        h, w = crop.shape[:2]
+        # size of the crop based on the minimum recognized face size is 31x36
+        if w < 30 or h < 35:
+            return
+        
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)      
+        ycrcb = cv2.cvtColor(crop, cv2.COLOR_BGR2YCrCb)
+        cr, cb = ycrcb[:, :, 1], ycrcb[:, :, 2]
+        skin_mask = (cr > 133) & (cr < 173) & (cb > 77) & (cb < 127)
+        skin_ratio = float(np.sum(skin_mask) / (h * w))
+        if skin_ratio < 0.30:
+            return
+
         sharpness = self.score_sharpness(crop)
+        sharpness_norm = min(sharpness/2000.0,1.0)
         brightness = self.score_brightness(crop)
         frontal = self.score_frontal(kps)
 
