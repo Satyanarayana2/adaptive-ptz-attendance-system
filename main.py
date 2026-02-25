@@ -230,11 +230,11 @@ def main():
             continue
 
         faces = detector.detect(frame)
-        if len(faces) > 0:
-            print(f"[DEBUG] Detected {len(faces)} faces")
+        # if len(faces) > 0:
+        #     print(f"[DEBUG] Detected {len(faces)} faces")
         tracked_faces = tracker.update(faces)
-        if len(tracked_faces) > 0:
-                print(f"[DEBUG] Tracked {len(tracked_faces)} faces")
+        # if len(tracked_faces) > 0:
+        #         print(f"[DEBUG] Tracked {len(tracked_faces)} faces")
 
         # Clean up old tracks from recognition cache
         current_track_ids = [track["track_id"] for track in tracked_faces]

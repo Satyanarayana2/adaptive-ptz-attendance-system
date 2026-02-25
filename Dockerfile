@@ -46,33 +46,8 @@ COPY . .
 # STEP7 Create directories
 RUN mkdir -p /app/unknown_faces /app/Face_images /app/logs /app/config
 
-# STEP8 Pre-download InsightFace models
-# (This puts models in /root/.insightface, which works automatically)
-RUN python3 << 'EOF'
-import sys
-import os
-print("[BUILD] Downloading InsightFace models...")
-
-try:
-    from insightface.app import FaceAnalysis
-    # Initialize to trigger download
-    app = FaceAnalysis(allowed_modules=['detection', 'landmark'])
-    app.prepare(ctx_id=-1, det_size=(640, 640))
-    print("[BUILD] FaceAnalysis models downloaded")
-except Exception as e:
-    print(f"[BUILD] Warning downloading FaceAnalysis: {e}", file=sys.stderr)
-
-try:
-    from insightface.model_zoo import model_zoo
-    # Download Buffalo_L
-    model = model_zoo.get_model('buffalo_l')
-    model.prepare(ctx_id=-1)
-    print("[BUILD] Buffalo_l embedding model downloaded")
-except Exception as e:
-    print(f"[BUILD] Warning downloading embedding model: {e}", file=sys.stderr)
-
-print("[BUILD] Model pre-download complete!")
-EOF
+# STEP8 copying the insightface models dir
+COPY .insightface /root/.insightface
 
 # STEP9 Env variables
 ENV PYTHONUNBUFFERED=1 \
