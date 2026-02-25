@@ -196,6 +196,7 @@ def main():
         else:
             print("[ERROR] Unable to connect to PTZ camera. Exiting.")
             print("[INFO] Using local webcam")
+            camera_type = "webcam"
             camera = cv2.VideoCapture(0)
             if not camera.isOpened():
                 print("[ERROR] Unable to open webcam. Exiting.")
@@ -333,4 +334,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\n[INFO] Interrupted by user. Exiting...")
-        exit(0)
+        os._exit(0)
