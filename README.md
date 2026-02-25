@@ -1,4 +1,4 @@
-# 🎯 Adaptive PTZ Camera Attendance System
+# Adaptive PTZ Camera Attendance System
 
 An enterprise-grade, fully automated student attendance system that leverages deep learning, mathematical frame-filtering, and dynamic PTZ (Pan-Tilt-Zoom) camera control. 
 
@@ -6,7 +6,7 @@ Designed for real-world college laboratories, this system solves the **"Domain G
 
 ---
 
-## 🧠 System Architecture & Core Modules
+## System Architecture & Core Modules
 
 ### 1. Detection & Tracking Module
 * **InsightDetector (SCRFD):** Utilizes the highly optimized SCRFD (Single-Stage Crafter for Face Detection) model from the InsightFace `buffalo_l` pack to find bounding boxes and 5 facial keypoints.
