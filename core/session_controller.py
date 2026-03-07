@@ -1,6 +1,6 @@
 import time
 from datetime import datetime
-from utils.ptz.presets import ENTRANCE_VIEW, WIDE_VIEW, RIGHT_CORNER_VIEW
+from utils.ptz.presets import ENTRANCE_VIEW, WIDE_VIEW, RIGHT_CORNER_VIEW, LAST_ROW_VIEW
 
 class SessionController:
     """
@@ -82,7 +82,10 @@ class SessionController:
             
             # Modulo 10 gives us a repeating 10-minute cycle. 
             # 0 to 4.99 = Wide View. 5 to 9.99 = Corner View.
-            if (scan_time_mins % 10) < 5:
+            cycle_time = scan_time_mins % 15
+            if cycle_time < 5:
                 self._change_state("SCAN_WIDE", WIDE_VIEW, enable_learning=False)
-            else:
+            elif cycle_time < 10:
                 self._change_state("SCAN_CORNER", RIGHT_CORNER_VIEW, enable_learning=False)
+            else:
+                self._change_state("LAST_ROW", LAST_ROW_VIEW, enable_learning=False)
