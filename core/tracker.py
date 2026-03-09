@@ -49,11 +49,16 @@ class KalmanTrack:
         for i in range(4):
             self.F[i, i+4] = 1
 
-        self.Q = np.eye(8) * 0.01
+        self.Q = np.eye(8) * 0.1
         self.H = np.eye(4, 8)
-        self.R = np.eye(4) * 1.0
+        self.R = np.eye(4) * 0.1
 
     def predict(self):
+        # velocity friction/decay
+        # applying friction if only the face is not detected in previous frame
+        if self.missed>0:
+            self.x[4] = 0.0
+            self.x[5] == 0.0
         self.x = self.F @ self.x
         self.P = self.F @ self.P @ self.F.T + self.Q
 
