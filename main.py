@@ -230,6 +230,7 @@ def main():
             continue
 
         faces = detector.detect(frame)
+        faces = [f for f in faces if f.get('score', 0.0) > 0.50]
         # if len(faces) > 0:
         #     print(f"[DEBUG] Detected {len(faces)} faces")
         tracked_faces = tracker.update(faces)
