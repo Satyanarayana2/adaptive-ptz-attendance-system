@@ -54,11 +54,12 @@ class KalmanTrack:
         self.R = np.eye(4) * 0.1
 
     def predict(self):
-        # velocity friction/decay
-        # applying friction if only the face is not detected in previous frame
+        # velocity friction/decay - zero ALL velocities on missed frames
         if self.missed>0:
-            self.x[4] = 0.0
-            self.x[5] == 0.0
+            self.x[4] = 0.0  # Stop moving X
+            self.x[5] = 0.0  # Stop moving Y
+            self.x[6] = 0.0  # Stop expanding Width
+            self.x[7] = 0.0  # Stop expanding Height
         self.x = self.F @ self.x
         self.P = self.F @ self.P @ self.F.T + self.Q
 
@@ -91,10 +92,12 @@ class KalmanTrack:
 
 
 class KalmanTracker:
-    def __init__(self, iou_threshold=0.3, max_missed=10):
+    def __init__(self, iou_threshold=0.3, max_missed=10, confirm_hits=2):
         self.iou_threshold = iou_threshold
         self.max_missed = max_missed
+        self.confirm_hits = confirm_hits  # frames a new detection must persist before getting a real track ID
         self.tracks = {}
+        self.tentative = {}  # track_id -> KalmanTrack (not yet confirmed)
         self.next_id = 1
 
     def update(self, detections):
@@ -109,11 +112,11 @@ class KalmanTracker:
         det_boxes = [d["bbox"] for d in valid_detections]
         det_kps = [d.get("kps") for d in valid_detections]  # Get kps if available
 
-        if len(track_ids) == 0:
+        if len(track_ids) == 0 and len(self.tentative) == 0:
             for det in valid_detections:
-                self.tracks[self.next_id] = KalmanTrack(self.next_id, det["bbox"], det.get("kps"))
+                self.tentative[self.next_id] = KalmanTrack(self.next_id, det["bbox"], det.get("kps"))
                 self.next_id += 1
-            return self._format_results(valid_detections)
+            return self._format_results()
 
         # IoU cost matrix
         cost = np.zeros((len(track_ids), len(det_boxes)))
@@ -134,11 +137,42 @@ class KalmanTracker:
                 assigned_tracks.add(tid)
                 assigned_dets.add(c)
 
-        # New tracks
-        for i, det in enumerate(valid_detections):
-            if i not in assigned_dets:
-                self.tracks[self.next_id] = KalmanTrack(self.next_id, det["bbox"], det.get("kps"))
+        # Unmatched detections → try to match tentative tracks first, then create new tentatives
+        unmatched_dets = [valid_detections[i] for i in range(len(valid_detections)) if i not in assigned_dets]
+        tentative_ids = list(self.tentative.keys())
+        assigned_tentatives = set()  # track which tentatives survived this frame
+
+        if tentative_ids and unmatched_dets:
+            t_boxes = [self.tentative[tid].get_bbox() for tid in tentative_ids]
+            for det in unmatched_dets:
+                matched_tentative = False
+                for ti, tid in enumerate(tentative_ids):
+                    if iou(t_boxes[ti], det["bbox"]) >= self.iou_threshold:
+                        self.tentative[tid].update(det["bbox"], det.get("kps"))
+                        assigned_tentatives.add(tid)  # mark as alive
+                        matched_tentative = True
+                        break
+                if not matched_tentative:
+                    self.tentative[self.next_id] = KalmanTrack(self.next_id, det["bbox"], det.get("kps"))
+                    assigned_tentatives.add(self.next_id - 1)
+                    self.next_id += 1
+        else:
+            for det in unmatched_dets:
+                self.tentative[self.next_id] = KalmanTrack(self.next_id, det["bbox"], det.get("kps"))
+                assigned_tentatives.add(self.next_id - 1)
                 self.next_id += 1
+
+        # Promote confirmed tentative tracks → real tracks
+        to_promote = []
+        for tid, t in self.tentative.items():
+            if t.age >= self.confirm_hits:
+                to_promote.append(tid)
+        for tid in to_promote:
+            self.tracks[tid] = self.tentative.pop(tid)
+            assigned_tentatives.discard(tid)  # no longer tentative
+
+        # FIXED CLEANUP: Evict any tentative not matched this frame → prevents RAM leak
+        self.tentative = {tid: t for tid, t in self.tentative.items() if tid in assigned_tentatives}
 
         # Cleanup
         to_delete = []
@@ -151,9 +185,9 @@ class KalmanTracker:
         for tid in to_delete:
             del self.tracks[tid]
 
-        return self._format_results(valid_detections)
+        return self._format_results()
 
-    def _format_results(self, detections):
+    def _format_results(self):
         results = []
         for track in self.tracks.values():
             results.append({

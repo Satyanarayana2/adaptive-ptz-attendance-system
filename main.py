@@ -51,39 +51,105 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
     if crop.size == 0:
         return None
 
-    # 2. Quality Selection
+    # 2. Cache Check FIRST — skip quality buffering entirely if already recognized.
+    if current_phase != "ENTRY":
+        cached_data = attendance_logger.check_cache(track_id)
+        if cached_data is not None:
+            person_id, score = cached_data
+
+            if person_id is not None:
+                # Already recognized — return green immediately, no buffering needed
+                return {
+                    "bbox": (x1, y1, x2, y2),
+                    "label": f"ID:{person_id} ({score:.2f})",
+                    "color": (0, 255, 0)
+                }
+
+            # person_id is None → cached as Unknown.
+            # Keep adding frames silently and retry recognition when buffer is ready.
+            # Show "Unknown" continuously instead of flipping back to "Analyzing..."
+            quality_selector.add_frame(track_id, crop, kps)
+            best = quality_selector.get_best(track_id)
+            if best is None:
+                # Buffer still filling — hold the Unknown label, do not show Analyzing
+                return {
+                    "bbox": (x1, y1, x2, y2),
+                    "label": "Unknown",
+                    "color": (0, 0, 255)
+                }
+            # Buffer ready — fall through to recognition retry below
+            best_crop, best_kps = best
+
+            try:
+                aligned = aligner.align(frame, best_kps)
+                result = recognizer.recognize(aligned)
+            except Exception:
+                print(f"[ERROR] Recognition retry failed for unknown track {track_id}")
+                result = {"matched": False}
+
+            if result["matched"]:
+                # Upgraded from Unknown → now recognized!
+                attendance_logger.cache_recognition(track_id, result["person_id"], result["score"])
+                if attendance_logger.should_log(track_id, result["person_id"]):
+                    rec_path = save_recognized_face(result["person_id"], best_crop)
+                    attendance_logger.mark_attendance(
+                        person_id=result["person_id"],
+                        confidence=result["score"],
+                        track_id=track_id,
+                        face_crop_path=rec_path
+                    )
+                if "embedding" in result and result["embedding"] is not None:
+                    adaptive_manager.process(
+                        person_id=result["person_id"],
+                        crop=best_crop,
+                        kps=best_kps,
+                        embedding=result["embedding"],
+                        sim_score=result["score"]
+                    )
+                return {
+                    "bbox": (x1, y1, x2, y2),
+                    "label": f"ID:{result['person_id']} ({result['score']:.2f})",
+                    "color": (0, 255, 0)
+                }
+            else:
+                # Still unknown after retry — reset cache sentinel and save
+                attendance_logger.cache_recognition(track_id, None, 0.0)
+                save_unknown_face(track_id, best_crop)
+                return {
+                    "bbox": (x1, y1, x2, y2),
+                    "label": "Unknown",
+                    "color": (0, 0, 255)
+                }
+
+    # 3. Quality Selection (cache miss or ENTRY phase — first-time recognition path)
     quality_selector.add_frame(track_id, crop, kps)
-    best = quality_selector.get_best(track_id) # should update to return the score in future if needed for logging or decision making
-    
-    # If not enough frames yet, just return drawing info
+    best = quality_selector.get_best(track_id)
+
     if best is None:
         return {
             "bbox": (x1, y1, x2, y2),
             "label": "Analyzing...",
-            "color": (255, 255, 0) # Yellow
+            "color": (255, 255, 0)
         }
 
     best_crop, best_kps = best
 
-    # 3. Cache Check
+    # 4. ENTRY phase cache check
     if current_phase == "ENTRY":
         cached_data = None
     else:
         cached_data = attendance_logger.check_cache(track_id)
-    
+
     if cached_data is not None:
         person_id, score = cached_data
-        result = {
-            "matched": True,
-            "person_id": person_id,
-            "score": score,
-            "name": "Cached"
-        }
+        if person_id is not None:
+            result = {"matched": True, "person_id": person_id, "score": score, "name": "Cached"}
+        else:
+            result = {"matched": False}
     else:
-        # 4. Alignment & Recognition (fully stateless, via DB query)
+        # 5. Alignment & Recognition
         try:
             aligned = aligner.align(frame, best_kps)
-            # recognizer itself calls the embedder to get vector, then does the DB query to get the match
             result = recognizer.recognize(aligned)
         except Exception:
             print(f"[ERROR] Alignment/Recognition failed for track {track_id}")
@@ -91,33 +157,33 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
 
         if result["matched"]:
             attendance_logger.cache_recognition(track_id, result["person_id"], result["score"])
+        else:
+            # Cache the Unknown state so next frames show "Unknown" not "Analyzing..."
+            attendance_logger.cache_recognition(track_id, None, 0.0)
 
-    # 5. Logging & Saving
+    # 6. Logging & Saving
     label = "Unknown"
-    color = (0, 0, 255) # Red
+    color = (0, 0, 255)
 
     if result["matched"]:
-        color = (0, 255, 0) # Green
+        color = (0, 255, 0)
         label = f"ID:{result['person_id']} ({result['score']:.2f})"
-        
-        # LOGIC: Check First, Save Later
+
         if attendance_logger.should_log(track_id, result["person_id"]):
             rec_path = save_recognized_face(result["person_id"], best_crop)
-            
             attendance_logger.mark_attendance(
                 person_id=result["person_id"],
                 confidence=result["score"],
                 track_id=track_id,
                 face_crop_path=rec_path
             )
-        # adaptive learning of domain face embeddings - only trigger if archface actually generated embedding not from cache miss
         if "embedding" in result and result["embedding"] is not None:
             adaptive_manager.process(
-                person_id = result["person_id"],
-                crop = best_crop,
-                kps = best_kps,
-                embedding = result["embedding"],
-                sim_score = result["score"]
+                person_id=result["person_id"],
+                crop=best_crop,
+                kps=best_kps,
+                embedding=result["embedding"],
+                sim_score=result["score"]
             )
     else:
         save_unknown_face(track_id, best_crop)
@@ -127,6 +193,7 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
         "label": label,
         "color": color
     }
+
 
 
 def main():

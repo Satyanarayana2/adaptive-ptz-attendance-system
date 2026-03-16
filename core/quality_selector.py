@@ -3,8 +3,8 @@
 import cv2
 import numpy as np
 import math
-import time
 import threading
+from collections import deque
 
 class QualitySelector:
     """
@@ -29,20 +29,16 @@ class QualitySelector:
         self.lock = threading.Lock()
 
 
-
     # SCORE FUNCTIONS
 
 
-    def score_sharpness(self, img):
-        """Higher is better."""
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    def score_sharpness(self, gray):
+        """Higher is better. Expects a pre-converted grayscale image."""
         return cv2.Laplacian(gray, cv2.CV_64F).var()
 
-    def score_brightness(self, img):
-        """Brightness scored 0–1 scale."""
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        mean_val = np.mean(gray)
-        return mean_val / 255.0
+    def score_brightness(self, gray):
+        """Brightness scored 0–1 scale. Expects a pre-converted grayscale image."""
+        return np.mean(gray) / 255.0
 
     def score_frontal(self, kps):
         """
@@ -69,14 +65,18 @@ class QualitySelector:
 
     def add_frame(self, track_id, crop, kps):
         """
-        Stores crop + score for this track_id if it passes few data-driven gates.
+        Stores crop + score for this track_id if it passes a few data-driven gates.
+        Grayscale conversion is done once and reused across all scoring functions.
         """
         h, w = crop.shape[:2]
         # size of the crop based on the minimum recognized face size is 31x36
         if w < 30 or h < 35:
             return
-        
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)      
+
+        # --- Single grayscale conversion reused by all scorers ---
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+
+        # Skin detection via YCrCb.
         ycrcb = cv2.cvtColor(crop, cv2.COLOR_BGR2YCrCb)
         cr, cb = ycrcb[:, :, 1], ycrcb[:, :, 2]
         skin_mask = (cr > 133) & (cr < 173) & (cb > 77) & (cb < 127)
@@ -84,9 +84,9 @@ class QualitySelector:
         if skin_ratio < 0.30:
             return
 
-        sharpness = self.score_sharpness(crop)
-        sharpness_norm = min(sharpness/2000.0,1.0)
-        brightness = self.score_brightness(crop)
+        # Pass pre-computed gray to avoid repeated conversion
+        sharpness = self.score_sharpness(gray)
+        brightness = self.score_brightness(gray)
         frontal = self.score_frontal(kps)
 
         # Weighted score
@@ -100,13 +100,10 @@ class QualitySelector:
 
         with self.lock:
             if track_id not in self.buffers:
-                self.buffers[track_id] = []
+                # Use deque with maxlen for O(1) append + automatic eviction
+                self.buffers[track_id] = deque(maxlen=self.max_buffer)
 
             self.buffers[track_id].append(entry)
-
-            # Keep buffer clean
-            if len(self.buffers[track_id]) > self.max_buffer:
-                self.buffers[track_id].pop(0)
 
 
     # GET BEST FRAME
@@ -114,8 +111,9 @@ class QualitySelector:
 
     def get_best(self, track_id):
         """
-        Returns the best crop for this ID once enough frames collected.
-        After returning, the buffer for this track_id is cleared.
+        Returns the best crop once enough frames are collected.
+        Buffer is fully wiped after returning — retained frames are useless
+        if the track_id changes, and could corrupt a new person's buffer.
         """
         with self.lock:
             if track_id not in self.buffers:
@@ -126,10 +124,15 @@ class QualitySelector:
             if len(frames) < self.min_frames:
                 return None  # wait for more frames
 
-            # Pick best by score
+            # O(n) max — no need to sort, we only want the single best
             best = max(frames, key=lambda f: f["score"])
 
-            # Clear buffer after use
-            self.buffers[track_id] = []
+            # Full wipe — stale crops from this track must not bleed into the next
+            self.buffers[track_id] = deque(maxlen=self.max_buffer)
 
             return best["crop"], best["kps"]
+
+    def clear(self, track_id):
+        """Explicitly remove a track's buffer (e.g. when track is deleted)."""
+        with self.lock:
+            self.buffers.pop(track_id, None)

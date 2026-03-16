@@ -9,6 +9,8 @@ class SessionController:
     """
     ENTRY_BUFFER_MINUTES = 30  # Watch Entrance for the first 30 mins
 
+    SCHEDULE_CACHE_TTL = 30  # seconds between DB schedule refreshes
+
     def __init__(self, db, ptz, adaptive_manager, tracker):
         self.db = db
         self.ptz = ptz
@@ -19,11 +21,24 @@ class SessionController:
         self.next_session = None
         self.state = "UNKNOWN"
 
+        # Schedule cache — avoids hitting DB every frame
+        self._cached_schedule = None
+        self._schedule_last_fetched = 0  # epoch time
+
+    def _get_schedule(self):
+        """Returns schedule from cache, refreshing from DB every 30 seconds."""
+        now = time.time()
+        if self._cached_schedule is None or (now - self._schedule_last_fetched) >= self.SCHEDULE_CACHE_TTL:
+            self._cached_schedule = self.db.get_scheduler_state()
+            self._schedule_last_fetched = now
+        return self._cached_schedule
+
     def update(self):
         """Called every frame. Refreshes state and decides action."""
-        schedule = self.db.get_scheduler_state()
+        schedule = self._get_schedule()  # cached — no DB hit unless 30s elapsed
         new_current = schedule['current']
         self.next_session = schedule['next']
+
 
         # Class just started (or an Overlap triggered a new class)
         if new_current and (self.current_session is None or new_current['class_id'] != self.current_session['class_id']):
