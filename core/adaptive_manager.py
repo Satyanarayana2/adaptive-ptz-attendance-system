@@ -29,20 +29,28 @@ class AdaptiveManager:
         right_eye = kps['right_eye']
         return math.hypot(left_eye[0] - right_eye[0], left_eye[1] - right_eye[1])
 
-    def process(self, person_id, crop, kps, embedding, sim_score):
+    def process(self, person_id, crop, kps, embedding, sim_score, template_type="ANCHOR"):
         if not self.config.get("enabled", True) or not self.learning_enabled:
             return
 
-        # 1. Calculate Live Physics internally
+        # 1. Pick threshold based on which type of template was matched.
+        #    ANCHOR templates are reliable enrollment references → lower threshold is safe.
+        #    ADAPTIVE templates are self-generated → require higher confidence to update further.
+        if template_type == "ANCHOR":
+            required_threshold = self.config["anchor_min_threshold"]   # 0.42
+        else:
+            required_threshold = self.config["adaptive_min_threshold"]  # 0.55
+
+        # 2. Calculate Live Physics internally
         sharpness = self._calculate_sharpness(crop)
         iod = self._calculate_iod(kps)
 
-        # 2. The Hard Gates
+        # 3. The Hard Gates
         if (sharpness >= self.config["min_sharpness"] and 
             iod >= self.config["min_iod"] and 
-            sim_score >= self.config["adaptive_min_threshold"]):
+            sim_score >= required_threshold):
             
-            # 3. Ask Database to Compete (Notice we don't save any images yet!)
+            # 4. Ask Database to Compete (Notice we don't save any images yet!)
             db_result = self.db.smart_adaptive_update(
                 person_id=person_id,
                 new_embedding=embedding,
@@ -50,8 +58,8 @@ class AdaptiveManager:
                 max_slots=self.config["max_slots_per_person"]
             )
             
-            # 4. Native OS Overwrite (Only fires if DB says we won)
+            # 5. Native OS Overwrite (Only fires if DB says we won)
             if db_result and db_result.get("action") in ["INSERT", "UPDATE"]:
                 final_path = db_result["image_path"]
                 cv2.imwrite(final_path, crop)
-                print(f"[ADAPTIVE] Physical image saved/overwritten at: {final_path}")
+                print(f"[ADAPTIVE] {template_type} match → saved at: {final_path} (threshold used: {required_threshold})")

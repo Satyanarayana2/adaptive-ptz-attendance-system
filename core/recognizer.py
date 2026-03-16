@@ -34,6 +34,7 @@ class Recognizer:
             p.name,
             p.roll_number,
             ft.id AS template_id,
+            ft.type AS template_type,
             (1 - (ft.embedding <=> %s::vector)) AS similarity
         FROM face_templates ft
         JOIN persons p ON ft.person_id = p.id
@@ -80,6 +81,7 @@ class Recognizer:
                     "roll": match['roll_number'],
                     "score": sim_score,
                     "matched_template_id": match['template_id'],
+                    "matched_template_type": match['template_type'],
                     "embedding": live_vector
                 }
             else:

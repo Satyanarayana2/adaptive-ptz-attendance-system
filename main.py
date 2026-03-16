@@ -104,7 +104,8 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
                         crop=best_crop,
                         kps=best_kps,
                         embedding=result["embedding"],
-                        sim_score=result["score"]
+                        sim_score=result["score"],
+                        template_type=result.get("matched_template_type", "ANCHOR")
                     )
                 return {
                     "bbox": (x1, y1, x2, y2),
@@ -183,7 +184,8 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
                 crop=best_crop,
                 kps=best_kps,
                 embedding=result["embedding"],
-                sim_score=result["score"]
+                sim_score=result["score"],
+                template_type=result.get("matched_template_type", "ANCHOR")
             )
     else:
         save_unknown_face(track_id, best_crop)
