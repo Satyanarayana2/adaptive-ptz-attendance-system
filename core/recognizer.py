@@ -47,10 +47,7 @@ class Recognizer:
                 OR
                 c.batch = 'STAFF'
             )
-            -- Apply SIMILARITY threshold directly (e.g., 0.35)
-            AND (1 - (ft.embedding <=> %s::vector)) >= %s
-            
-        -- Order by raw distance ASC (smallest distance = highest similarity)
+        -- No threshold filter here — applied in Python so we get best_score for unknowns
         ORDER BY (ft.embedding <=> %s::vector) ASC
         LIMIT 1;
         """
@@ -59,11 +56,9 @@ class Recognizer:
             cur = self.db.conn.cursor(cursor_factory=RealDictCursor)
             vector_str = str(live_vector.tolist())
             
-            # Pass parameters: SELECT vector, WHERE vector, Threshold, ORDER BY vector
+            # 2 params: SELECT similarity, ORDER BY distance
             cur.execute(query, (
-                vector_str, 
-                vector_str, 
-                self.similarity_threshold, 
+                vector_str,
                 vector_str
             ))
             
@@ -72,20 +67,27 @@ class Recognizer:
 
             if match:
                 sim_score = float(match['similarity'])
-                print(f"[DEBUG] DB matched {match['name']} with score: {sim_score:.4f}")
-                
-                return {
-                    "matched": True,
-                    "person_id": match['person_id'],
-                    "name": match['name'],
-                    "roll": match['roll_number'],
-                    "score": sim_score,
-                    "matched_template_id": match['template_id'],
-                    "matched_template_type": match['template_type'],
-                    "embedding": live_vector
-                }
+
+                if sim_score >= self.similarity_threshold:
+                    print(f"[DEBUG] DB matched {match['name']} with score: {sim_score:.4f}")
+                    return {
+                        "matched": True,
+                        "person_id": match['person_id'],
+                        "name": match['name'],
+                        "roll": match['roll_number'],
+                        "score": sim_score,
+                        "matched_template_id": match['template_id'],
+                        "matched_template_type": match['template_type'],
+                        "embedding": live_vector
+                    }
+                else:
+                    # Below threshold — known person at bad angle, or too far
+                    # Return best_score so caller can decide whether to save Unknown crop
+                    print(f"[DEBUG] Below threshold: best match {match['name']} at {sim_score:.4f} (need {self.similarity_threshold})")
+                    return self._empty_result(score=sim_score, embedding=live_vector)
             else:
-                print(f"[DEBUG] No match found above threshold {self.similarity_threshold}")
+                # No face templates in DB at all for this class
+                print(f"[DEBUG] No faces in DB for current schedule")
                 
         except Exception as e:
             print(f"[RECOGNIZER DB ERROR] {e}")

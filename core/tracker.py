@@ -92,7 +92,7 @@ class KalmanTrack:
 
 
 class KalmanTracker:
-    def __init__(self, iou_threshold=0.3, max_missed=10, confirm_hits=2):
+    def __init__(self, iou_threshold=0.3, max_missed=10, confirm_hits=1):
         self.iou_threshold = iou_threshold
         self.max_missed = max_missed
         self.confirm_hits = confirm_hits  # frames a new detection must persist before getting a real track ID

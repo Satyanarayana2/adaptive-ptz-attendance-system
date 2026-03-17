@@ -33,7 +33,7 @@ sys.stdout = Logger()  # Redirect print statements to both console and log file
 last_unknown_save = {}
 
 
-def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, current_phase):
+def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, current_phase, unknown_save_threshold=0.2):
     """
     Worker function to process a single face in a separate thread.
     """
@@ -113,9 +113,11 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
                     "color": (0, 255, 0)
                 }
             else:
-                # Still unknown after retry — reset cache sentinel and save
+                # Still unknown after retry — reset cache sentinel
                 attendance_logger.cache_recognition(track_id, None, 0.0)
-                save_unknown_face(track_id, best_crop)
+                # Only save crop if score is truly low (not an enrolled person at bad angle)
+                if result.get("score", 0.0) < unknown_save_threshold:
+                    save_unknown_face(track_id, best_crop)
                 return {
                     "bbox": (x1, y1, x2, y2),
                     "label": "Unknown",
@@ -188,7 +190,9 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
                 template_type=result.get("matched_template_type", "ANCHOR")
             )
     else:
-        save_unknown_face(track_id, best_crop)
+        # Only save crop if score is truly low — not just a bad angle of an enrolled face
+        if result.get("score", 0.0) < unknown_save_threshold:
+            save_unknown_face(track_id, best_crop)
 
     return {
         "bbox": (x1, y1, x2, y2),
@@ -287,7 +291,7 @@ def main():
     IS_DOCKER = os.path.exists("/.dockerenv")
     # Main loop
     # Use 4 workers 
-    executor = ThreadPoolExecutor(max_workers=4)
+    executor = ThreadPoolExecutor(max_workers=8)
     while True:
         if web_app.stop_signal:
             print("[INFO] Stop signal received. Ending main loop.")

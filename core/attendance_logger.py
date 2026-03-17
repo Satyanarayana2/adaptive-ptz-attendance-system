@@ -40,9 +40,8 @@ class AttendanceLogger:
         """
         with self.lock:
             if track_id in self.track_recognition_cache:
-                data = self.track_recognition_cache[track_id] # Get cached score
+                data = self.track_recognition_cache[track_id]
                 self.cache_hits += 1
-                print(f"[CACHE HIT] Track {track_id} - - > Person {data[0]} (Hits: {self.cache_hits})")
                 return data
             else:
                 self.cache_misses += 1 
