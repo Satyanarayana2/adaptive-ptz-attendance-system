@@ -436,12 +436,7 @@ class Database:
         query = """
             INSERT INTO attendance_log (person_id, confidence, track_id, face_crop_path, timestamp)
             VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (person_id, date)
-            DO UPDATE SET
-                confidence = EXCLUDED.confidence,
-                face_crop_path = EXCLUDED.face_crop_path,
-                timestamp = EXCLUDED.timestamp
-            WHERE EXCLUDED.confidence > attendance_log.confidence;
+            ON CONFLICT (person_id, date) DO NOTHING;
         """
         try:
             cur.execute(query, (person_id, confidence, track_id, face_crop_path, current_ts))

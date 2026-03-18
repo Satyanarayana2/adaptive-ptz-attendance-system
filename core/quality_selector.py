@@ -96,7 +96,16 @@ class QualitySelector:
             frontal * 0.2
         )
 
-        entry = {"crop": crop, "kps": kps, "score": score}
+        # Determine if this crop meets the Direct Pass criteria
+        # Based on TestAnalysis: Sharpness >= 400, Luminance 80-200, Angle < 5 (Frontal > 0.833)
+        mean_lum = brightness * 255.0
+        is_direct_pass = (
+            sharpness >= 400 and
+            (80 < mean_lum < 200) and
+            frontal > 0.833
+        )
+
+        entry = {"crop": crop, "kps": kps, "score": score, "direct_pass": is_direct_pass}
 
         with self.lock:
             if track_id not in self.buffers:
@@ -109,19 +118,24 @@ class QualitySelector:
     # GET BEST FRAME
 
 
-    def get_best(self, track_id):
+    def get_best(self, track_id, min_frames_override=None):
         """
         Returns the best crop once enough frames are collected.
         Buffer is fully wiped after returning — retained frames are useless
         if the track_id changes, and could corrupt a new person's buffer.
         """
+        required_frames = min_frames_override if min_frames_override is not None else self.min_frames
+        
         with self.lock:
             if track_id not in self.buffers:
                 return None
 
             frames = self.buffers[track_id]
+            
+            # Check if any frame in the buffer meets direct pass criteria
+            has_direct_pass = any(f.get("direct_pass", False) for f in frames)
 
-            if len(frames) < self.min_frames:
+            if len(frames) < required_frames and not has_direct_pass:
                 return None  # wait for more frames
 
             # O(n) max — no need to sort, we only want the single best
