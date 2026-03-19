@@ -62,4 +62,4 @@ class AdaptiveManager:
             if db_result and db_result.get("action") in ["INSERT", "UPDATE"]:
                 final_path = db_result["image_path"]
                 cv2.imwrite(final_path, crop)
-                print(f"[ADAPTIVE] {template_type} match → saved at: {final_path} (threshold used: {required_threshold})")
+                print(f"[ADAPTIVE] {template_type} match -> saved at: {final_path} (threshold used: {required_threshold})")

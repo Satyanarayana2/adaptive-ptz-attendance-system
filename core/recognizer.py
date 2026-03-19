@@ -2,20 +2,23 @@
 
 import numpy as np
 from psycopg2.extras import RealDictCursor
+import time
 
 class Recognizer:
     """
     Stateless Face Recognizer.
     """
 
-    def __init__(self, embedder, db, threshold=0.50):
+    def __init__(self, embedder, db, threshold=0.50, profiler=None):
         self.embedder = embedder
         self.db = db
         # We only need the similarity threshold now!
         self.similarity_threshold = float(threshold)
+        self.profiler = profiler
 
     def recognize(self, aligned_face):
         # 1. Generate Embedding
+        recognition_start = time.time()
         live_vector = self.embedder.get_embedding(aligned_face)
         if live_vector is None:
             return self._empty_result()
@@ -70,6 +73,10 @@ class Recognizer:
 
                 if sim_score >= self.similarity_threshold:
                     print(f"[DEBUG] DB matched {match['name']} with score: {sim_score:.4f}")
+
+                    if self.profiler:
+                        elapsed_ms = (time.time() - recognition_start) * 1000
+                        self.profiler.record_recognition_time(elapsed_ms)
                     return {
                         "matched": True,
                         "person_id": match['person_id'],
@@ -84,14 +91,25 @@ class Recognizer:
                     # Below threshold — known person at bad angle, or too far
                     # Return best_score so caller can decide whether to save Unknown crop
                     print(f"[DEBUG] Below threshold: best match {match['name']} at {sim_score:.4f} (need {self.similarity_threshold})")
+                    
+                    if self.profiler:
+                        elapsed_ms = (time.time() - recognition_start) * 1000
+                        self.profiler.record_recognition_time(elapsed_ms)
+
                     return self._empty_result(score=sim_score, embedding=live_vector)
             else:
                 # No face templates in DB at all for this class
                 print(f"[DEBUG] No faces in DB for current schedule")
+                if self.profiler:
+                    elapsed_ms = (time.time() - recognition_start) * 1000
+                    self.profiler.record_recognition_time(elapsed_ms)
                 
         except Exception as e:
             print(f"[RECOGNIZER DB ERROR] {e}")
             self.db.conn.rollback()
+            if self.profiler:
+                elapsed_ms = (time.time() - recognition_start) * 1000
+                self.profiler.record_recognition_time(elapsed_ms)
 
         return self._empty_result(embedding=live_vector)
 

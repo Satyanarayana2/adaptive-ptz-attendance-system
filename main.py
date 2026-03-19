@@ -20,6 +20,7 @@ from core.quality_selector import QualitySelector
 from core.folder_watcher import FolderWatcher
 from core.adaptive_manager import AdaptiveManager
 from core.session_controller import SessionController
+from core.performance_results import PerformanceProfiler
 
 from utils.ptz.axis_camera import AxisCamera
 from utils.ptz.presets import ENTRANCE_VIEW
@@ -33,7 +34,7 @@ sys.stdout = Logger()  # Redirect print statements to both console and log file
 last_unknown_save = {}
 
 
-def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, current_phase, unknown_save_threshold=0.2):
+def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, current_phase, profiler=None, unknown_save_threshold=0.2):
     """
     Worker function to process a single face in a separate thread.
     """
@@ -74,8 +75,8 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
             is_retry_phase = (0.30 <= _sc <= 0.41)
             required_frames = 3 if is_retry_phase else None
             
-            quality_selector.add_frame(track_id, crop, kps)
-            best = quality_selector.get_best(track_id, min_frames_override=required_frames)
+            quality_selector.add_frame(track_id, crop, kps, profiler=profiler)
+            best = quality_selector.get_best(track_id, min_frames_override=required_frames, profiler=profiler)
             if best is None:
                 # Buffer still filling — hold the label, do not show Analyzing
                 label = "Retrying..." if is_retry_phase else "Unknown"
@@ -91,6 +92,7 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
             try:
                 aligned = aligner.align(frame, best_kps)
                 result = recognizer.recognize(aligned)
+                if profiler: profiler.record_recognition_result(result["matched"], result.get("score", 0.0))
             except Exception:
                 print(f"[ERROR] Recognition retry failed for unknown track {track_id}")
                 result = {"matched": False}
@@ -138,8 +140,8 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
                 }
 
     # 3. Quality Selection (cache miss or ENTRY phase — first-time recognition path)
-    quality_selector.add_frame(track_id, crop, kps)
-    best = quality_selector.get_best(track_id)
+    quality_selector.add_frame(track_id, crop, kps, profiler=profiler)
+    best = quality_selector.get_best(track_id, profiler=profiler)
 
     if best is None:
         return {
@@ -167,6 +169,7 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
         try:
             aligned = aligner.align(frame, best_kps)
             result = recognizer.recognize(aligned)
+            if profiler: profiler.record_recognition_result(result["matched"], result.get("score", 0.0))
         except Exception:
             print(f"[ERROR] Alignment/Recognition failed for track {track_id}")
             result = {"matched": False}
@@ -221,6 +224,9 @@ def main():
     print("=" * 60)
     print("PTZ CAMERA BASED ATTENDANCE SYSTEM STARTED")
     print("=" * 60)
+
+    # initializing performance profiler
+    profiler = PerformanceProfiler()
 
     # Database
     db = Database()
@@ -291,7 +297,7 @@ def main():
                 return
     
     # this module is for making the ptz movements accordingly to the time_table session
-    session_controller = SessionController(db=db, ptz=camera if camera_type == "ptz" else None, adaptive_manager=adaptive_manager, tracker=tracker)
+    session_controller = SessionController(db=db, ptz=camera if camera_type == "ptz" else None, adaptive_manager=adaptive_manager, tracker=tracker, profiler=profiler)
 
     # Start Flask server in a background thread (non-daemon so it survives after AI loop stops)
     api_thread = threading.Thread(
@@ -317,13 +323,16 @@ def main():
             time.sleep(0.05)
             continue
 
+        profiler.record_camera_frame()
+        profiler.start_frame_processing()
+
         faces = detector.detect(frame)
         faces = [f for f in faces if f.get('score', 0.0) > 0.50]
         # if len(faces) > 0:
         #     print(f"[DEBUG] Detected {len(faces)} faces")
         tracked_faces = tracker.update(faces)
-        # if len(tracked_faces) > 0:
-        #         print(f"[DEBUG] Tracked {len(tracked_faces)} faces")
+        profiler.record_detection(len(faces))
+        profiler.record_tracking(len(tracked_faces))
 
         # Clean up old tracks from recognition cache
         current_track_ids = [track["track_id"] for track in tracked_faces]
@@ -333,7 +342,7 @@ def main():
         for track in tracked_faces:
             future = executor.submit(
                 process_single_face,
-                track, frame.copy(), quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, session_controller.state
+                track, frame.copy(), quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, session_controller.state, profiler=profiler
             )
             futures.append(future)
         # Collect results and draw on frame
@@ -348,7 +357,8 @@ def main():
                     cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
             except Exception as e:
                 print(f"[ERROR] Error processing tracked face: {e}")
-                
+
+        profiler.end_frame_processing()        
         # Display the resulting frame in to the Flask app
         overlay = frame.copy()
         cv2.rectangle(overlay, (5, 5), (320, 110), (0, 0, 0), -1)
@@ -365,7 +375,10 @@ def main():
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 web_app.stop_signal = True
             
-    
+    profiler.end_system()
+    profiler.print_session_report() if profiler.sessions_data else None
+    print("\n[PROFILER] Performance metrics saved to logs/performance/")
+
     # Print final cache statistics
     stats = attendance_logger.get_cache_stats()
 

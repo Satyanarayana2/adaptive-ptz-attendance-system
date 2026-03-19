@@ -15,7 +15,7 @@ class QualitySelector:
         - Brightness score
     """
 
-    def __init__(self, buffer_size=None, max_buffer=10, min_frames=5):
+    def __init__(self, buffer_size=None, max_buffer=10, min_frames=5, profiler=None):
         """
         buffer_size: alias for max_buffer (used by main.py)
         """
@@ -26,6 +26,7 @@ class QualitySelector:
         else:
             self.max_buffer = max_buffer
         self.min_frames = min_frames
+        self.profiler = profiler
         self.lock = threading.Lock()
 
 
@@ -63,7 +64,7 @@ class QualitySelector:
     # ADD FRAME
 
 
-    def add_frame(self, track_id, crop, kps):
+    def add_frame(self, track_id, crop, kps, profiler=None):
         """
         Stores crop + score for this track_id if it passes a few data-driven gates.
         Grayscale conversion is done once and reused across all scoring functions.
@@ -88,6 +89,10 @@ class QualitySelector:
         sharpness = self.score_sharpness(gray)
         brightness = self.score_brightness(gray)
         frontal = self.score_frontal(kps)
+
+        if profiler:
+            mean_lum = brightness * 255.0
+            profiler.record_quality_scores(sharpness, mean_lum, frontal)
 
         # Weighted score
         score = (
@@ -118,7 +123,7 @@ class QualitySelector:
     # GET BEST FRAME
 
 
-    def get_best(self, track_id, min_frames_override=None):
+    def get_best(self, track_id, min_frames_override=None, profiler=None):
         """
         Returns the best crop once enough frames are collected.
         Buffer is fully wiped after returning — retained frames are useless
@@ -140,6 +145,12 @@ class QualitySelector:
 
             # O(n) max — no need to sort, we only want the single best
             best = max(frames, key=lambda f: f["score"])
+
+            if profiler:
+                if has_direct_pass:
+                    profiler.record_instant_pass()
+                else:
+                    profiler.record_buffer_usage(len(frames))
 
             # Full wipe — stale crops from this track must not bleed into the next
             self.buffers[track_id] = deque(maxlen=self.max_buffer)

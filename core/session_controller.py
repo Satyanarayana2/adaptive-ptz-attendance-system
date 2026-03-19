@@ -11,15 +11,17 @@ class SessionController:
 
     SCHEDULE_CACHE_TTL = 30  # seconds between DB schedule refreshes
 
-    def __init__(self, db, ptz, adaptive_manager, tracker):
+    def __init__(self, db, ptz, adaptive_manager, tracker, profiler=None):
         self.db = db
         self.ptz = ptz
         self.adaptive_manager = adaptive_manager
         self.tracker = tracker 
-        
+        self.profiler = profiler
+
         self.current_session = None
         self.next_session = None
         self.state = "UNKNOWN"
+        self._session_started = False
 
         # Schedule cache — avoids hitting DB every frame
         self._cached_schedule = None
@@ -58,6 +60,9 @@ class SessionController:
 
     def transition_to_idle(self):
         """Reset for break/end of day."""
+        if self.profiler:
+            self.profiler.end_session()
+
         self.current_session = None
         self._change_state("IDLE", ENTRANCE_VIEW, enable_learning=True)
         if self.next_session:
@@ -90,6 +95,12 @@ class SessionController:
         # Phase 1: Entry (0-15 mins)
         if elapsed_mins <= self.ENTRY_BUFFER_MINUTES:
             self._change_state("ENTRY", ENTRANCE_VIEW, enable_learning=True)
+
+            if self.profiler and not self._session_started:
+                batch = self.current_session['batch']
+                section = self.current_session['section']
+                self.profiler.set_session(batch, section)
+                self._session_started = True
 
         # Phase 2: Alternating Scan (15 mins -> End of Class)
         else:
