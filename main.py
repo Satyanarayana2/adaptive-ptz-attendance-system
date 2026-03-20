@@ -43,101 +43,120 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
     kps = track["kps"]
 
     # 1. Safe Cropping
+    t0 = time.time()
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = map(int, bbox)
     x1, y1 = max(0, x1), max(0, y1)
     x2, y2 = min(w, x2), min(h, y2)
     crop = frame[y1:y2, x1:x2]
+    elapsed = time.time() - t0
+    if profiler: profiler.record_module_time(track_id, "crop", elapsed)
 
     if crop.size == 0:
         return None
 
     # 2. Cache Check FIRST — skip quality buffering entirely if already recognized.
-    if current_phase != "ENTRY":
-        cached_data = attendance_logger.check_cache(track_id)
-        if cached_data is not None:
-            person_id, score = cached_data
+    t0 = time.time()
+    cached_data = attendance_logger.check_cache(track_id) if current_phase != "ENTRY" else None
+    elapsed = time.time() - t0
+    if profiler: profiler.record_module_time(track_id, "cache_check", elapsed)
 
-            if person_id is not None:
-                # Already recognized — return green immediately, no buffering needed
-                return {
-                    "bbox": (x1, y1, x2, y2),
-                    "label": f"ID:{person_id} ({score:.2f})",
-                    "color": (0, 255, 0)
-                }
+    if cached_data is not None:
+        person_id, score = cached_data
 
-            # person_id is None → cached as Unknown.
-            # Keep adding frames silently and retry recognition when buffer is ready.
-            # Show "Unknown" or "Retrying..." continuously instead of flipping back to "Analyzing..."
+        if person_id is not None:
+            # Already recognized — return green immediately, no buffering needed
+            return {
+                "bbox": (x1, y1, x2, y2),
+                "label": f"ID:{person_id} ({score:.2f})",
+                "color": (0, 255, 0)
+            }
+
+        # person_id is None → cached as Unknown.
+        # Keep adding frames silently and retry recognition when buffer is ready.
+        # Show "Unknown" or "Retrying..." continuously instead of flipping back to "Analyzing..."
+        
+        # Check if previous attempt scored between 0.30 and 0.41 to enter Retry Phase
+        _sc = score if isinstance(score, (int, float)) else 0.0
+        is_retry_phase = (0.30 <= _sc <= 0.41)
+        required_frames = 3 if is_retry_phase else None
+        
+        t0 = time.time()
+        quality_selector.add_frame(track_id, crop, kps, profiler=profiler)
+        elapsed = time.time() - t0
+        if profiler: profiler.record_module_time(track_id, "quality_buffer", elapsed)
+
+        t0 = time.time()
+        best = quality_selector.get_best(track_id, min_frames_override=required_frames, profiler=profiler)
+        elapsed = time.time() - t0
+        if profiler: profiler.record_module_time(track_id, "get_best", elapsed)
+
+        if best is None:
+            # Buffer still filling — hold the label, do not show Analyzing
+            label = "Retrying..." if is_retry_phase else "Unknown"
+            color = (0, 165, 255) if is_retry_phase else (0, 0, 255) # Orange for retry
+            return {
+                "bbox": (x1, y1, x2, y2),
+                "label": label,
+                "color": color
+            }
+        # Buffer ready — fall through to recognition retry below
+        best_crop, best_kps = best
+
+        t0 = time.time()
+        try:
+            aligned = aligner.align(frame, best_kps)
+            result = recognizer.recognize(aligned)
+            if profiler: profiler.record_recognition_result(result["matched"], result.get("score", 0.0))
+        except Exception:
+            print(f"[ERROR] Recognition retry failed for unknown track {track_id}")
+            result = {"matched": False}
+        elapsed = time.time() - t0
+        if profiler: profiler.record_module_time(track_id, "aligned & recognize", elapsed)
+        if profiler: profiler.record_recognition_result(result["matched"], result.get("score", 0.0))
+
+
+        if result["matched"]:
+            # Upgraded from Unknown → now recognized!
+            attendance_logger.cache_recognition(track_id, result["person_id"], result["score"])
+            if attendance_logger.should_log(track_id, result["person_id"]):
+                rec_path = save_recognized_face(result["person_id"], best_crop)
+                attendance_logger.mark_attendance(
+                    person_id=result["person_id"],
+                    confidence=result["score"],
+                    track_id=track_id,
+                    face_crop_path=rec_path
+                )
+            if "embedding" in result and result["embedding"] is not None:
+                adaptive_manager.process(
+                    person_id=result["person_id"],
+                    crop=best_crop,
+                    kps=best_kps,
+                    embedding=result["embedding"],
+                    sim_score=result["score"],
+                    template_type=result.get("matched_template_type", "ANCHOR")
+                )
+            return {
+                "bbox": (x1, y1, x2, y2),
+                "label": f"ID:{result['person_id']} ({result['score']:.2f})",
+                "color": (0, 255, 0)
+            }
+        else:
+            _sc = result.get("score", 0.0)
+            last_score = _sc if isinstance(_sc, (int, float)) else 0.0
+            # Still unknown after retry — reset cache sentinel with actual score
+            attendance_logger.cache_recognition(track_id, None, last_score)
+            # Only save crop if score is truly low (not an enrolled person at bad angle)
+            if last_score < unknown_save_threshold:
+                save_unknown_face(track_id, best_crop)
             
-            # Check if previous attempt scored between 0.30 and 0.41 to enter Retry Phase
-            _sc = score if isinstance(score, (int, float)) else 0.0
-            is_retry_phase = (0.30 <= _sc <= 0.41)
-            required_frames = 3 if is_retry_phase else None
-            
-            quality_selector.add_frame(track_id, crop, kps, profiler=profiler)
-            best = quality_selector.get_best(track_id, min_frames_override=required_frames, profiler=profiler)
-            if best is None:
-                # Buffer still filling — hold the label, do not show Analyzing
-                label = "Retrying..." if is_retry_phase else "Unknown"
-                color = (0, 165, 255) if is_retry_phase else (0, 0, 255) # Orange for retry
-                return {
-                    "bbox": (x1, y1, x2, y2),
-                    "label": label,
-                    "color": color
-                }
-            # Buffer ready — fall through to recognition retry below
-            best_crop, best_kps = best
-
-            try:
-                aligned = aligner.align(frame, best_kps)
-                result = recognizer.recognize(aligned)
-                if profiler: profiler.record_recognition_result(result["matched"], result.get("score", 0.0))
-            except Exception:
-                print(f"[ERROR] Recognition retry failed for unknown track {track_id}")
-                result = {"matched": False}
-
-            if result["matched"]:
-                # Upgraded from Unknown → now recognized!
-                attendance_logger.cache_recognition(track_id, result["person_id"], result["score"])
-                if attendance_logger.should_log(track_id, result["person_id"]):
-                    rec_path = save_recognized_face(result["person_id"], best_crop)
-                    attendance_logger.mark_attendance(
-                        person_id=result["person_id"],
-                        confidence=result["score"],
-                        track_id=track_id,
-                        face_crop_path=rec_path
-                    )
-                if "embedding" in result and result["embedding"] is not None:
-                    adaptive_manager.process(
-                        person_id=result["person_id"],
-                        crop=best_crop,
-                        kps=best_kps,
-                        embedding=result["embedding"],
-                        sim_score=result["score"],
-                        template_type=result.get("matched_template_type", "ANCHOR")
-                    )
-                return {
-                    "bbox": (x1, y1, x2, y2),
-                    "label": f"ID:{result['person_id']} ({result['score']:.2f})",
-                    "color": (0, 255, 0)
-                }
-            else:
-                _sc = result.get("score", 0.0)
-                last_score = _sc if isinstance(_sc, (int, float)) else 0.0
-                # Still unknown after retry — reset cache sentinel with actual score
-                attendance_logger.cache_recognition(track_id, None, last_score)
-                # Only save crop if score is truly low (not an enrolled person at bad angle)
-                if last_score < unknown_save_threshold:
-                    save_unknown_face(track_id, best_crop)
-                
-                label = "Retrying..." if 0.30 <= last_score <= 0.41 else "Unknown"
-                color = (0, 165, 255) if label == "Retrying..." else (0, 0, 255)
-                return {
-                    "bbox": (x1, y1, x2, y2),
-                    "label": label,
-                    "color": color
-                }
+            label = "Retrying..." if 0.30 <= last_score <= 0.41 else "Unknown"
+            color = (0, 165, 255) if label == "Retrying..." else (0, 0, 255)
+            return {
+                "bbox": (x1, y1, x2, y2),
+                "label": label,
+                "color": color
+            }
 
     # 3. Quality Selection (cache miss or ENTRY phase — first-time recognition path)
     quality_selector.add_frame(track_id, crop, kps, profiler=profiler)

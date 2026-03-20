@@ -36,12 +36,12 @@ services:
         condition: service_healthy
     volumes:
       # External ACCESS: Maps your local directories into the container for logs, unknown faces, and face images
-      - ./Face_images:/app/Face_images
-      - ./unknown_faces:/app/unknown_faces
-      - ./config:/app/config
-      - ./templates:/app/templates
-      - ./logs:/app/logs
-      - ./recognized_faces:/app/recognized_faces
-      - ./adaptive_faces:/app/adaptive_faces
+      - ./Face_images:/app/Face_images:ro
+      - ./unknown_faces:/app/unknown_faces:rw
+      - ./config:/app/config:ro
+      - ./templates:/app/templates:ro
+      - ./logs:/app/logs:rw
+      - ./recognized_faces:/app/recognized_faces:rw
+      - ./adaptive_faces:/app/adaptive_faces:rw
     environment:
       - PYTHONUNBUFFERED=1
