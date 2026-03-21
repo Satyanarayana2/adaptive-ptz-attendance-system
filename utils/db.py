@@ -1,6 +1,8 @@
 import psycopg2
+from psycopg2 import pool
 import json
 import os
+from contextlib import contextmanager
 from psycopg2.extras import RealDictCursor
 from pgvector.psycopg2 import register_vector
 from datetime import datetime
@@ -16,7 +18,8 @@ class Database:
 
     def __init__(self, config_path="config/db_config.json"):
         self.config_path = config_path
-        self.conn = None
+        self.pool = None
+        self.conn = None # Legacy single connection for main loop setup operations
         self._connect()
         self._enable_vector_extension()
         register_vector(self.conn)
@@ -37,27 +40,42 @@ class Database:
             curr.close()
 
     def _connect(self):
-        """Connect to PostgreSQL with simple retries."""
+        """Connect to PostgreSQL with pooled retries."""
         import time
         max_retries = 5
         for i in range(max_retries):
             try:
                 with open(self.config_path, "r") as f:
                     cfg = json.load(f)
-                self.conn = psycopg2.connect(
+                
+                # Setup threaded pool accommodating 12+ concurrent threads
+                self.pool = pool.ThreadedConnectionPool(
+                    minconn=1,
+                    maxconn=20,
                     host=cfg["host"],
                     port=cfg["port"],
                     user=cfg["user"],
                     password=cfg["password"],
                     database=cfg["database"]
                 )
-                print("[DB] Connected to PostgreSQL.")
+                
+                self.conn = self.pool.getconn() # Keep primary active connection
+                print("[DB] Connected to PostgreSQL Threaded Pool.")
                 return
             except Exception as e:
-                print(f"[DB] Connection failed (Attempt {i+1}/{max_retries}): {e}")
+                print(f"[DB] Connection pool failed (Attempt {i+1}/{max_retries}): {e}")
                 time.sleep(3)
         raise Exception("Could not connect to database after retries.")
 
+    @contextmanager
+    def get_connection(self):
+        """Yields a thread-safe connection from the pool."""
+        conn = self.pool.getconn()
+        try:
+            yield conn
+        finally:
+            self.pool.putconn(conn)
+    
     # --------------------------------------------------------------
 
     def _create_tables(self):
@@ -333,24 +351,25 @@ class Database:
         self.conn.commit()
 
     def insert_embedding(self, person_id, embedding, image_path, type ='ADAPTIVE', quality_score=0.0):
-        cur = self.conn.cursor()
-        try:
-            cur.execute(
-                """
-                INSERT INTO face_templates
-                (person_id, embedding, image_path, type, quality_score, created_at, last_matched_at)
-                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
-                RETURNING id;
-                """,
-                (person_id, embedding.tolist(), image_path, type, quality_score)
-            )
-            new_id = cur.fetchone()[0]
-            self.conn.commit()
-            return new_id
-        except Exception as e:
-            self.conn.rollback()
-            print(f"[DB ERROR] Insert Template Failed: {e}")
-            return None
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO face_templates
+                    (person_id, embedding, image_path, type, quality_score, created_at, last_matched_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                    RETURNING id;
+                    """,
+                    (person_id, embedding.tolist(), image_path, type, quality_score)
+                )
+                new_id = cur.fetchone()[0]
+                conn.commit()
+                return new_id
+            except Exception as e:
+                conn.rollback()
+                print(f"[DB ERROR] Insert Template Failed: {e}")
+                return None
         
     def get_gallery_by_class(self, class_id):
         """
@@ -431,23 +450,22 @@ class Database:
     # --------------------------------------------------------------
 
     def insert_attendance(self, person_id, track_id, confidence, face_crop_path = None):
-        cur = self.conn.cursor()
-        current_ts = datetime.now()
-        query = """
-            INSERT INTO attendance_log (person_id, confidence, track_id, face_crop_path, timestamp)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (person_id, date) DO NOTHING;
-        """
-        try:
-            cur.execute(query, (person_id, confidence, track_id, face_crop_path, current_ts))
-            self.conn.commit()
-        except Exception as e:
-            self.conn.rollback()
-            print(f"[DB ERROR] Insert Attendance Failed: {e}")
-        finally:
-            cur.close()
-
-        self.conn.commit()
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            current_ts = datetime.now()
+            query = """
+                INSERT INTO attendance_log (person_id, confidence, track_id, face_crop_path, timestamp)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (person_id, date) DO NOTHING;
+            """
+            try:
+                cur.execute(query, (person_id, confidence, track_id, face_crop_path, current_ts))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                print(f"[DB ERROR] Insert Attendance Failed: {e}")
+            finally:
+                cur.close()
 
     # --------------------------------------------------------------
 
@@ -465,59 +483,62 @@ class Database:
         returns:   
         {"action":"INSERT/UPDATE/SKIPPED", "slot_id":int} or None on error
         """
-        cur = self.conn.cursor(cursor_factory=RealDictCursor)
-        try:
-            vector_str = str(new_embedding.tolist())
-            # 1 - getting all the current adaptive templates for this person_id, order by similarity to the new face embedding
-            cur.execute("""
-                    SELECT id, quality_score, image_path, (1-(embedding <=> %s::vector)) AS similarity
-                    FROM face_templates
-                    WHERE person_id = %s AND type = 'ADAPTIVE'
-                    ORDER BY similarity DESC;
-                        """,(vector_str, person_id))
-            existing_adaptives = cur.fetchall()
-
-            # 2 - if that person_id doesn't have adaptive vectors inside or less than the max_slots if slots are full the code will be check with similarity 
-            if len(existing_adaptives) < max_slots:
+        with self.get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            try:
+                vector_str = str(new_embedding.tolist())
+                # 1 - getting all the current adaptive templates for this person_id, order by similarity to the new face embedding
                 cur.execute("""
-                        INSERT INTO face_templates (person_id, embedding, type, quality_score, created_at, last_matched_at)
-                        VALUES (%s, %s, 'ADAPTIVE', %s, NOW(), NOW())
-                        RETURNING id;
-                            """, (person_id, vector_str, quality_score))
-                new_id = cur.fetchone()['id']
-                image_path = f"adaptive_faces/person_{person_id}_slot_{new_id}.jpg"
-                cur.execute("UPDATE face_templates SET image_path = %s WHERE id = %s;",(image_path, new_id))
-                self.conn.commit()
+                        SELECT id, quality_score, image_path, (1-(embedding <=> %s::vector)) AS similarity
+                        FROM face_templates
+                        WHERE person_id = %s AND type = 'ADAPTIVE'
+                        ORDER BY similarity DESC;
+                            """,(vector_str, person_id))
+                existing_adaptives = cur.fetchall()
 
-                print(f"[DB ADAPTIVE] Created new pose slot {new_id} for person {person_id} (Slot {len(existing_adaptives)+1}/{max_slots})")
-                return {"action":"INSERT", "image_path": image_path}
-            
-            # 3 - slot are full exactly max_slots adaptives mean
-            closest_slot = existing_adaptives[0]
+                # 2 - if that person_id doesn't have adaptive vectors inside or less than the max_slots if slots are full the code will be check with similarity 
+                if len(existing_adaptives) < max_slots:
+                    cur.execute("""
+                            INSERT INTO face_templates (person_id, embedding, type, quality_score, created_at, last_matched_at)
+                            VALUES (%s, %s, 'ADAPTIVE', %s, NOW(), NOW())
+                            RETURNING id;
+                                """, (person_id, vector_str, quality_score))
+                    new_id = cur.fetchone()['id']
+                    image_path = f"adaptive_faces/person_{person_id}_slot_{new_id}.jpg"
+                    cur.execute("UPDATE face_templates SET image_path = %s WHERE id = %s;",(image_path, new_id))
+                    conn.commit()
 
-            # 4 - Quality check for updation 
-            if quality_score > closest_slot['quality_score']:
-                slot_id = closest_slot['id']
-                image_path = f"adaptive_faces/person_{person_id}_slot_{slot_id}.jpg"
-                cur.execute("""
-                        UPDATE face_templates
-                        SET embedding = %s, image_path = %s, quality_score = %s, last_matched_at = NOW()
-                        WHERE id = %s;
-                            """,(vector_str, image_path, quality_score, slot_id))
-                self.conn.commit()
-                print(f"[DB ADAPTIVE] Upgraded pose slot {closest_slot['id']} for person {person_id} (Quality: {closest_slot['quality_score']:.1f} -> {quality_score:.1f})")
-                return {"action": "UPDATE", "image_path": image_path}
-            else:
-                print(f"[DB ADAPTIVE] Skipped. Existing pose is sharper")
-                return {"action":"SKIPPED"}
-        except Exception as e:
-            self.conn.rollback()
-            print(f"[DB Error] Smart Adaptive update failed: {e}")
-            return None
-        finally:
-            cur.close()
+                    print(f"[DB ADAPTIVE] Created new pose slot {new_id} for person {person_id} (Slot {len(existing_adaptives)+1}/{max_slots})")
+                    return {"action":"INSERT", "image_path": image_path}
+                
+                # 3 - slot are full exactly max_slots adaptives mean
+                closest_slot = existing_adaptives[0]
+
+                # 4 - Quality check for updation 
+                if quality_score > closest_slot['quality_score']:
+                    slot_id = closest_slot['id']
+                    image_path = f"adaptive_faces/person_{person_id}_slot_{slot_id}.jpg"
+                    cur.execute("""
+                            UPDATE face_templates
+                            SET embedding = %s, image_path = %s, quality_score = %s, last_matched_at = NOW()
+                            WHERE id = %s;
+                                """,(vector_str, image_path, quality_score, slot_id))
+                    conn.commit()
+                    print(f"[DB ADAPTIVE] Upgraded pose slot {closest_slot['id']} for person {person_id} (Quality: {closest_slot['quality_score']:.1f} -> {quality_score:.1f})")
+                    return {"action": "UPDATE", "image_path": image_path}
+                else:
+                    print(f"[DB ADAPTIVE] Skipped. Existing pose is sharper")
+                    return {"action":"SKIPPED"}
+            except Exception as e:
+                conn.rollback()
+                print(f"[DB Error] Smart Adaptive update failed: {e}")
+                return None
+            finally:
+                cur.close()
 
     def close(self):
         if self.conn:
-            self.conn.close()
-            print("[DB] Connection closed.")
+            self.pool.putconn(self.conn)
+        if self.pool:
+            self.pool.closeall()
+            print("[DB] Connection pool closed.")

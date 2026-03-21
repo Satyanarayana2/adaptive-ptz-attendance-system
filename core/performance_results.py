@@ -67,7 +67,7 @@ class PerformanceProfiler:
         
         print(f"\n[PROFILER] System initialized at {self.system_start_datetime.strftime('%H:%M:%S')}")
 
-    def record_module_time(self, track_id, module_name, elapsed):
+    def record_module_time(self, module_name, elapsed):
         with self.lock:
             if module_name not in self.module_timings:
                 self.module_timings[module_name] = []

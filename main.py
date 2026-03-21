@@ -25,6 +25,7 @@ from core.performance_results import PerformanceProfiler
 from utils.ptz.axis_camera import AxisCamera
 from utils.ptz.presets import ENTRANCE_VIEW
 from utils.logs import Logger
+from utils.threaded_camera import ThreadedCamera
 
 # Import FastAPI app and shared state
 from app import app, lock
@@ -34,14 +35,16 @@ sys.stdout = Logger()  # Redirect print statements to both console and log file
 last_unknown_save = {}
 
 
-def process_single_face(track, frame, quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, current_phase, profiler=None, unknown_save_threshold=0.2):
+def prepare_face_for_recognition(track, frame, quality_selector, attendance_logger, aligner, current_phase, profiler=None):
     """
-    Worker function to process a single face in a separate thread.
+    STAGE 1: GATHER
+    Crops, checks cache, buffers, and aligns.
+    Returns a dict with state.
     """
     track_id = track["track_id"]
     bbox = track["bbox"]
     kps = track["kps"]
-
+    
     # 1. Safe Cropping
     t0 = time.time()
     h, w = frame.shape[:2]
@@ -50,33 +53,29 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
     x2, y2 = min(w, x2), min(h, y2)
     crop = frame[y1:y2, x1:x2]
     elapsed = time.time() - t0
-    if profiler: profiler.record_module_time(track_id, "crop", elapsed)
+    if profiler: profiler.record_module_time("crop", elapsed)
 
     if crop.size == 0:
         return None
-
-    # 2. Cache Check FIRST — skip quality buffering entirely if already recognized.
+        
+    # 2. Cache Check FIRST
     t0 = time.time()
     cached_data = attendance_logger.check_cache(track_id) if current_phase != "ENTRY" else None
     elapsed = time.time() - t0
-    if profiler: profiler.record_module_time(track_id, "cache_check", elapsed)
+    if profiler: profiler.record_module_time("cache_check", elapsed)
 
     if cached_data is not None:
         person_id, score = cached_data
-
         if person_id is not None:
-            # Already recognized — return green immediately, no buffering needed
             return {
+                "track_id": track_id,
+                "state": "recognized",
                 "bbox": (x1, y1, x2, y2),
                 "label": f"ID:{person_id} ({score:.2f})",
                 "color": (0, 255, 0)
             }
-
-        # person_id is None → cached as Unknown.
-        # Keep adding frames silently and retry recognition when buffer is ready.
-        # Show "Unknown" or "Retrying..." continuously instead of flipping back to "Analyzing..."
         
-        # Check if previous attempt scored between 0.30 and 0.41 to enter Retry Phase
+        # person_id is None -> cached as Unknown
         _sc = score if isinstance(score, (int, float)) else 0.0
         is_retry_phase = (0.30 <= _sc <= 0.41)
         required_frames = 3 if is_retry_phase else None
@@ -84,132 +83,89 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
         t0 = time.time()
         quality_selector.add_frame(track_id, crop, kps, profiler=profiler)
         elapsed = time.time() - t0
-        if profiler: profiler.record_module_time(track_id, "quality_buffer", elapsed)
+        if profiler: profiler.record_module_time("quality_buffer", elapsed)
 
-        t0 = time.time()
         best = quality_selector.get_best(track_id, min_frames_override=required_frames, profiler=profiler)
-        elapsed = time.time() - t0
-        if profiler: profiler.record_module_time(track_id, "get_best", elapsed)
-
         if best is None:
-            # Buffer still filling — hold the label, do not show Analyzing
             label = "Retrying..." if is_retry_phase else "Unknown"
-            color = (0, 165, 255) if is_retry_phase else (0, 0, 255) # Orange for retry
+            color = (0, 165, 255) if is_retry_phase else (0, 0, 255)
             return {
+                "track_id": track_id,
+                "state": "buffering",
                 "bbox": (x1, y1, x2, y2),
                 "label": label,
                 "color": color
             }
-        # Buffer ready — fall through to recognition retry below
+            
         best_crop, best_kps = best
-
-        t0 = time.time()
         try:
             aligned = aligner.align(frame, best_kps)
-            result = recognizer.recognize(aligned)
         except Exception:
-            print(f"[ERROR] Recognition retry failed for unknown track {track_id}")
-            result = {"matched": False}
-        elapsed = time.time() - t0
-        if profiler: profiler.record_module_time(track_id, "aligned & recognize", elapsed)
-        if profiler: profiler.record_recognition_result(track_id, result["matched"], result.get("score", 0.0), result.get("person_id"))
-
-
-        if result["matched"]:
-            # Upgraded from Unknown → now recognized!
-            attendance_logger.cache_recognition(track_id, result["person_id"], result["score"])
-            if attendance_logger.should_log(track_id, result["person_id"]):
-                rec_path = save_recognized_face(result["person_id"], best_crop)
-                attendance_logger.mark_attendance(
-                    person_id=result["person_id"],
-                    confidence=result["score"],
-                    track_id=track_id,
-                    face_crop_path=rec_path
-                )
-            if "embedding" in result and result["embedding"] is not None:
-                adaptive_manager.process(
-                    person_id=result["person_id"],
-                    crop=best_crop,
-                    kps=best_kps,
-                    embedding=result["embedding"],
-                    sim_score=result["score"],
-                    template_type=result.get("matched_template_type", "ANCHOR")
-                )
-            return {
-                "bbox": (x1, y1, x2, y2),
-                "label": f"ID:{result['person_id']} ({result['score']:.2f})",
-                "color": (0, 255, 0)
-            }
-        else:
-            _sc = result.get("score", 0.0)
-            last_score = _sc if isinstance(_sc, (int, float)) else 0.0
-            # Still unknown after retry — reset cache sentinel with actual score
-            attendance_logger.cache_recognition(track_id, None, last_score)
-            # Only save crop if score is truly low (not an enrolled person at bad angle)
-            if last_score < unknown_save_threshold:
-                save_unknown_face(track_id, best_crop)
+            return None
             
-            label = "Retrying..." if 0.30 <= last_score <= 0.41 else "Unknown"
-            color = (0, 165, 255) if label == "Retrying..." else (0, 0, 255)
-            return {
-                "bbox": (x1, y1, x2, y2),
-                "label": label,
-                "color": color
-            }
+        return {
+            "track_id": track_id,
+            "state": "needs_recognition",
+            "bbox": (x1, y1, x2, y2),
+            "aligned": aligned,
+            "best_crop": best_crop,
+            "best_kps": best_kps,
+            "last_score": _sc,
+            "is_retry": True
+        }
 
-    # 3. Quality Selection (cache miss or ENTRY phase — first-time recognition path)
+    # 3. Quality Selection (first-time recognition)
     quality_selector.add_frame(track_id, crop, kps, profiler=profiler)
     best = quality_selector.get_best(track_id, profiler=profiler)
 
     if best is None:
         return {
+            "track_id": track_id,
+            "state": "buffering",
             "bbox": (x1, y1, x2, y2),
             "label": "Analyzing...",
             "color": (255, 255, 0)
         }
 
     best_crop, best_kps = best
+    try:
+        aligned = aligner.align(frame, best_kps)
+    except Exception:
+        return None
+        
+    return {
+        "track_id": track_id,
+        "state": "needs_recognition",
+        "bbox": (x1, y1, x2, y2),
+        "aligned": aligned,
+        "best_crop": best_crop,
+        "best_kps": best_kps,
+        "last_score": 0.0,
+        "is_retry": False
+    }
 
-    # 4. ENTRY phase cache check
-    if current_phase == "ENTRY":
-        cached_data = None
-    else:
-        cached_data = attendance_logger.check_cache(track_id)
-
-    if cached_data is not None:
-        person_id, score = cached_data
-        if person_id is not None:
-            result = {"matched": True, "person_id": person_id, "score": score, "name": "Cached"}
-        else:
-            result = {"matched": False}
-    else:
-        # 5. Alignment & Recognition
-        try:
-            aligned = aligner.align(frame, best_kps)
-            result = recognizer.recognize(aligned)
-        except Exception:
-            print(f"[ERROR] Alignment/Recognition failed for track {track_id}")
-            result = {"matched": False}
-
-        if profiler: 
-            profiler.record_recognition_result(track_id, result["matched"], result.get("score", 0.0), result.get("person_id"))
-
-        if result["matched"]:
-            attendance_logger.cache_recognition(track_id, result["person_id"], result["score"])
-        else:
-            # Cache the Unknown state so next frames show "Unknown" not "Analyzing..."
-            attendance_logger.cache_recognition(track_id, None, result.get("score", 0.0))
-
-    # 6. Logging & Saving
-    _sc = result.get("score", 0.0)
-    last_score = _sc if isinstance(_sc, (int, float)) else 0.0
-    label = "Retrying..." if (not result.get("matched") and 0.30 <= last_score <= 0.41) else "Unknown"
-    color = (0, 165, 255) if label == "Retrying..." else (0, 0, 255)
+def finalize_recognition(data, recognizer, attendance_logger, adaptive_manager, unknown_save_threshold, profiler=None):
+    """
+    STAGE 3: SCATTER
+    Takes exactly the embedding generated from the Batch phase and runs the DB/Logging logic.
+    """
+    track_id = data["track_id"]
+    best_crop = data["best_crop"]
+    best_kps = data["best_kps"]
+    embedding = data.get("embedding")
+    
+    t0 = time.time()
+    try:
+        result = recognizer.recognize_from_embedding(embedding)
+    except Exception:
+        result = {"matched": False}
+        
+    elapsed = time.time() - t0
+    if profiler: profiler.record_module_time("recognize_db", elapsed)
+    if profiler: profiler.record_recognition_result(track_id, result["matched"], result.get("score", 0.0), result.get("person_id"))
 
     if result["matched"]:
-        color = (0, 255, 0)
-        label = f"ID:{result['person_id']} ({result['score']:.2f})"
-
+        attendance_logger.cache_recognition(track_id, result["person_id"], result["score"])
         if attendance_logger.should_log(track_id, result["person_id"]):
             rec_path = save_recognized_face(result["person_id"], best_crop)
             attendance_logger.mark_attendance(
@@ -227,16 +183,27 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
                 sim_score=result["score"],
                 template_type=result.get("matched_template_type", "ANCHOR")
             )
+        
+        return {
+            "bbox": data["bbox"],
+            "label": f"ID:{result['person_id']} ({result['score']:.2f})",
+            "color": (0, 255, 0)
+        }
     else:
-        # Only save crop if score is truly low — not just a bad angle of an enrolled face
-        if result.get("score", 0.0) < unknown_save_threshold:
+        _sc = result.get("score", 0.0)
+        last_score = _sc if isinstance(_sc, (int, float)) else 0.0
+        attendance_logger.cache_recognition(track_id, None, last_score)
+        
+        if last_score < unknown_save_threshold:
             save_unknown_face(track_id, best_crop)
-
-    return {
-        "bbox": (x1, y1, x2, y2),
-        "label": label,
-        "color": color
-    }
+            
+        label = "Retrying..." if 0.30 <= last_score <= 0.41 else "Unknown"
+        color = (0, 165, 255) if label == "Retrying..." else (0, 0, 255)
+        return {
+            "bbox": data["bbox"],
+            "label": label,
+            "color": color
+        }
 
 
 
@@ -293,31 +260,37 @@ def main():
         config=app_config["adaptive_gallery"], db=db, 
     )
 
-    # Camera connection
-
     camera_type = app_config.get("camera_type", "webcam")
     if camera_type == "ptz":
         ptz_config = app_config["ptz"]
-        camera = AxisCamera(
+        raw_camera = AxisCamera(
             ip = ptz_config["ip"],
             username = ptz_config["username"],
             password = ptz_config["password"]
         )
 
-        if camera.connect():
-            camera.open_stream()
+        if raw_camera.connect():
+            raw_camera.open_stream()
             print("[INFO] PTZ camera stream ready")
+            camera = ThreadedCamera(raw_camera).start()
         else:
             print("[ERROR] Unable to connect to PTZ camera. Exiting.")
             print("[INFO] Using local webcam")
             camera_type = "webcam"
-            camera = cv2.VideoCapture(0)
-            if not camera.isOpened():
+            raw_camera = cv2.VideoCapture(0)
+            if not raw_camera.isOpened():
                 print("[ERROR] Unable to open webcam. Exiting.")
                 return
+            camera = ThreadedCamera(raw_camera).start()
+    else:
+        raw_camera = cv2.VideoCapture(0)
+        if not raw_camera.isOpened():
+            print("[ERROR] Unable to open webcam. Exiting.")
+            return
+        camera = ThreadedCamera(raw_camera).start()
     
     # this module is for making the ptz movements accordingly to the time_table session
-    session_controller = SessionController(db=db, ptz=camera if camera_type == "ptz" else None, adaptive_manager=adaptive_manager, tracker=tracker, profiler=profiler)
+    session_controller = SessionController(db=db, ptz=raw_camera if camera_type == "ptz" else None, adaptive_manager=adaptive_manager, tracker=tracker, profiler=profiler)
 
     # Start Flask server in a background thread (non-daemon so it survives after AI loop stops)
     api_thread = threading.Thread(
@@ -338,7 +311,7 @@ def main():
             print("[INFO] Stop signal received. Ending main loop.")
             break
         session_controller.update()
-        ret, frame = camera.read_frame() if camera_type == "ptz" else camera.read()
+        ret, frame = camera.read()
         if not ret:
             time.sleep(0.05)
             continue
@@ -357,26 +330,67 @@ def main():
         # Clean up old tracks from recognition cache
         current_track_ids = [track["track_id"] for track in tracked_faces]
         attendance_logger.cleanup_old_tracks(current_track_ids)
-        # concurrently running per-track processing using ThreadPoolExecutor
-        futures = []
+        
+        # STAGE 1: Gather
+        gather_futures = []
         for track in tracked_faces:
             future = executor.submit(
-                process_single_face,
-                track, frame.copy(), quality_selector, attendance_logger, aligner, recognizer, adaptive_manager, session_controller.state, profiler=profiler
+                prepare_face_for_recognition,
+                track, frame.copy(), quality_selector, attendance_logger, aligner, session_controller.state, profiler
             )
-            futures.append(future)
-        # Collect results and draw on frame
-        for future in futures:
+            gather_futures.append(future)
+            
+        gathered_data = []
+        for future in gather_futures:
             try:
-                data = future.result() # wait for thread to finish
-                if data:
-                    x1, y1, x2, y2 = data["bbox"]
-                    label = data["label"]
-                    color = data["color"]
+                res = future.result()
+                if res:
+                    gathered_data.append(res)
+            except Exception as e:
+                print(f"[ERROR] Stage 1 Prep Error: {e}")
+                
+        # STAGE 2: Batch (Main Thread)
+        faces_to_recognize = [d for d in gathered_data if d["state"] == "needs_recognition"]
+        if faces_to_recognize:
+            t0 = time.time()
+            aligned_list = [d["aligned"] for d in faces_to_recognize]
+            embeddings = embedder.get_embeddings(aligned_list)
+            for d, emb in zip(faces_to_recognize, embeddings):
+                d["embedding"] = emb
+            elapsed = time.time() - t0
+            if profiler: profiler.record_module_time("batch_onnx", elapsed)
+            
+        # STAGE 3: Scatter
+        scatter_futures = []
+        for data in gathered_data:
+            if data["state"] == "needs_recognition":
+                # Submit to stage 3
+                future = executor.submit(
+                    finalize_recognition,
+                    data, recognizer, attendance_logger, adaptive_manager, 0.2, profiler
+                )
+                scatter_futures.append(future)
+            else:
+                # Already processed (cached or buffering)
+                # Just draw it instantly
+                x1, y1, x2, y2 = data["bbox"]
+                label = data["label"]
+                color = data["color"]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                
+        # Wait for scatter to finish
+        for future in scatter_futures:
+            try:
+                res = future.result()
+                if res:
+                    x1, y1, x2, y2 = res["bbox"]
+                    label = res["label"]
+                    color = res["color"]
                     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                     cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
             except Exception as e:
-                print(f"[ERROR] Error processing tracked face: {e}")
+                print(f"[ERROR] Stage 3 Scatter Error: {e}")
 
         profiler.end_frame_processing()        
         # Display the resulting frame in to the Flask app

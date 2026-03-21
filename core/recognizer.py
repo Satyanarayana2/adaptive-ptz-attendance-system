@@ -16,10 +16,9 @@ class Recognizer:
         self.similarity_threshold = float(threshold)
         self.profiler = profiler
 
-    def recognize(self, aligned_face):
-        # 1. Generate Embedding
+    def recognize_from_embedding(self, live_vector):
+        # 1. Database Search Query against embedding
         recognition_start = time.time()
-        live_vector = self.embedder.get_embedding(aligned_face)
         if live_vector is None:
             return self._empty_result()
 
@@ -56,17 +55,18 @@ class Recognizer:
         """
 
         try:
-            cur = self.db.conn.cursor(cursor_factory=RealDictCursor)
-            vector_str = str(live_vector.tolist())
-            
-            # 2 params: SELECT similarity, ORDER BY distance
-            cur.execute(query, (
-                vector_str,
-                vector_str
-            ))
-            
-            match = cur.fetchone()
-            cur.close()
+            with self.db.get_connection() as conn:
+                cur = conn.cursor(cursor_factory=RealDictCursor)
+                vector_str = str(live_vector.tolist())
+                
+                # 2 params: SELECT similarity, ORDER BY distance
+                cur.execute(query, (
+                    vector_str,
+                    vector_str
+                ))
+                
+                match = cur.fetchone()
+                cur.close()
 
             if match:
                 sim_score = float(match['similarity'])
@@ -106,7 +106,6 @@ class Recognizer:
                 
         except Exception as e:
             print(f"[RECOGNIZER DB ERROR] {e}")
-            self.db.conn.rollback()
             if self.profiler:
                 elapsed_ms = (time.time() - recognition_start) * 1000
                 self.profiler.record_recognition_time(elapsed_ms)
