@@ -46,9 +46,12 @@ class AdaptiveManager:
         iod = self._calculate_iod(kps)
 
         # 3. The Hard Gates
+        # Absolute safety minimum to prevent template drifting even if config is badly tuned
+        absolute_minimum = max(required_threshold, 0.50)
+        
         if (sharpness >= self.config["min_sharpness"] and 
             iod >= self.config["min_iod"] and 
-            sim_score >= required_threshold):
+            sim_score >= absolute_minimum):
             
             # 4. Ask Database to Compete (Notice we don't save any images yet!)
             db_result = self.db.smart_adaptive_update(

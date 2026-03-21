@@ -70,8 +70,15 @@ class PerformanceProfiler:
     def record_module_time(self, module_name, elapsed):
         with self.lock:
             if module_name not in self.module_timings:
-                self.module_timings[module_name] = []
-            self.module_timings[module_name].append(elapsed)
+                self.module_timings[module_name] = {"count": 0, "sum_ms": 0.0, "min_ms": float('inf'), "max_ms": 0.0}
+            
+            stats = self.module_timings[module_name]
+            elapsed_ms = elapsed * 1000.0
+            
+            stats["count"] += 1
+            stats["sum_ms"] += elapsed_ms
+            if elapsed_ms < stats["min_ms"]: stats["min_ms"] = elapsed_ms
+            if elapsed_ms > stats["max_ms"]: stats["max_ms"] = elapsed_ms
     
     # actual processing throughput - frames /  elaapsed time
     def _calculate_processing_fps(self):
@@ -87,13 +94,13 @@ class PerformanceProfiler:
         
     def  _module_stats(self):
         stats = {}
-        for mod, times in self.module_timings.items():
-            if times:
+        for mod, data in self.module_timings.items():
+            if data["count"] > 0:
                 stats[mod] = {
-                    "count": len(times),
-                    "avg_ms": sum(times) / len(times) * 1000.0,
-                    "min_ms": min(times) * 1000.0,
-                    "max_ms": max(times) * 1000.0,
+                    "count": data["count"],
+                    "avg_ms": data["sum_ms"] / data["count"],
+                    "min_ms": data["min_ms"],
+                    "max_ms": data["max_ms"],
                 }
         return stats
     # ===== SESSION MANAGEMENT =====
@@ -147,30 +154,33 @@ class PerformanceProfiler:
         system_end_datetime = datetime.now()
         self._save_system_runtime(system_end_datetime)
 
+    def _write_json_async(self, filename, report):
+        def _write():
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            try:
+                with open(filename, 'w') as f:
+                    json.dump(report, f, indent=2)
+                print(f"[PROFILER] Report saved asynchronously: {filename}")
+            except Exception as e:
+                print(f"[ERROR] Failed to save performance report: {e}")
+                
+        threading.Thread(target=_write, daemon=True).start()
+
     def _save_session_report(self, session_id):
         """Save session report to disk"""
         report = self._generate_session_report(session_id)
-        
-        # Create directory if not exists
-        os.makedirs("logs/performance", exist_ok=True)
         
         # Filename: batch-section_YYYY-MM-DD_HHMMSS.json
         timestamp_str = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         filename = f"logs/performance/{session_id}_{timestamp_str}.json"
         
-        with open(filename, 'w') as f:
-            json.dump(report, f, indent=2)
-        
         # Also store in memory for quick access
         self.sessions_data[session_id] = report
-        print(f"[PROFILER] Session report saved: {filename}")
+        self._write_json_async(filename, report)
 
     def _save_system_runtime(self, end_datetime):
         """Save overall system runtime (when no session is running)"""
         report = self._generate_system_report(end_datetime)
-        
-        # Create directory if not exists
-        os.makedirs("logs/performance", exist_ok=True)
         
         # Filename: YYYY-MM-DD_From_HH-MM_to_HH-MM.json
         date_str = self.system_start_datetime.strftime("%Y-%m-%d")
@@ -178,10 +188,7 @@ class PerformanceProfiler:
         end_time_str = end_datetime.strftime("%H-%M")
         filename = f"logs/performance/{date_str}_From_{start_time_str}_to_{end_time_str}.json"
         
-        with open(filename, 'w') as f:
-            json.dump(report, f, indent=2)
-        
-        print(f"[PROFILER] System runtime report saved: {filename}")
+        self._write_json_async(filename, report)
 
     def _generate_session_report(self, session_id):
         """Generate comprehensive report for a session"""

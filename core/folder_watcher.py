@@ -65,7 +65,7 @@ class FolderWatcher:
         # Step 5: Align & Embed
         try:
             aligned_face = self.aligner.align(img, face["kps"])
-            embedding = self.embedder.get_embedding(aligned_face)
+            embedding = self.embedder.get_embeddings([aligned_face])[0]
         except Exception as e:
             print(f"[SKIP] Face processing failed for {filename}: {e}")
             return

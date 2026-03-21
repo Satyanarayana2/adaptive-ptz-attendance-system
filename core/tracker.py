@@ -154,12 +154,12 @@ class KalmanTracker:
                         break
                 if not matched_tentative:
                     self.tentative[self.next_id] = KalmanTrack(self.next_id, det["bbox"], det.get("kps"))
-                    assigned_tentatives.add(self.next_id - 1)
+                    assigned_tentatives.add(self.next_id)
                     self.next_id += 1
         else:
             for det in unmatched_dets:
                 self.tentative[self.next_id] = KalmanTrack(self.next_id, det["bbox"], det.get("kps"))
-                assigned_tentatives.add(self.next_id - 1)
+                assigned_tentatives.add(self.next_id)
                 self.next_id += 1
 
         # Promote confirmed tentative tracks → real tracks

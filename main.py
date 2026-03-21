@@ -320,7 +320,7 @@ def main():
         profiler.start_frame_processing()
 
         faces = detector.detect(frame)
-        faces = [f for f in faces if f.get('score', 0.0) > 0.50]
+        faces = [f for f in faces if f.get('score', 0.0) > 0.65]
         # if len(faces) > 0:
         #     print(f"[DEBUG] Detected {len(faces)} faces")
         tracked_faces = tracker.update(faces)
