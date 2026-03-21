@@ -63,16 +63,15 @@ class PerformanceProfiler:
         # ===== SESSION STORAGE =====
         self.sessions_data = {}  # batch-section -> report
         self.module_timings = {}
+        self.successfully_recognized_tracks = {}
         
         print(f"\n[PROFILER] System initialized at {self.system_start_datetime.strftime('%H:%M:%S')}")
 
     def record_module_time(self, track_id, module_name, elapsed):
         with self.lock:
-            if track_id not in self.module_timings:
-                self.module_timings[track_id] = {}
-            if module_name not in self.module_timings[track_id]:
-                self.module_timings[track_id][module_name] = []
-            self.module_timings[track_id][module_name].append(elapsed)
+            if module_name not in self.module_timings:
+                self.module_timings[module_name] = []
+            self.module_timings[module_name].append(elapsed)
     
     # actual processing throughput - frames /  elaapsed time
     def _calculate_processing_fps(self):
@@ -88,16 +87,14 @@ class PerformanceProfiler:
         
     def  _module_stats(self):
         stats = {}
-        for track_id, modules in self.module_timings.items():
-            stats[track_id] = {}
-            for mod, times in modules.items():
-                if times:
-                    stats[track_id][mod] = {
-                        "count": len(times),
-                        "avg_ms": sum(times) / len(times) * 1000.0,
-                        "min_ms": min(times) * 1000.0,
-                        "max_ms": max(times) * 1000.0,
-                    }
+        for mod, times in self.module_timings.items():
+            if times:
+                stats[mod] = {
+                    "count": len(times),
+                    "avg_ms": sum(times) / len(times) * 1000.0,
+                    "min_ms": min(times) * 1000.0,
+                    "max_ms": max(times) * 1000.0,
+                }
         return stats
     # ===== SESSION MANAGEMENT =====
     
@@ -128,6 +125,7 @@ class PerformanceProfiler:
             self.quality_scores.clear()
             self.buffer_metrics.clear()
             self.module_timings.clear()
+            self.successfully_recognized_tracks.clear()
             
             print(f"\n[PROFILER] Session started: {self.current_session}")
 
@@ -227,6 +225,7 @@ class PerformanceProfiler:
                 "unknown": self.total_unknown,
                 "retried": self.total_retried,
                 "recognition_rate_percent": (self.total_recognized / max(self.total_recognized + self.total_unknown + self.total_retried, 1) * 100),
+                "recognized_tracks": self.successfully_recognized_tracks
             },
 
             # ==== MODULE TIMINGS =====
@@ -277,6 +276,7 @@ class PerformanceProfiler:
                 "unknown": self.total_unknown,
                 "retried": self.total_retried,
                 "recognition_rate_percent": (self.total_recognized / max(self.total_recognized + self.total_unknown + self.total_retried, 1) * 100),
+                "recognized_tracks": self.successfully_recognized_tracks
             },
 
             # ==== MODULE TIMINGS =====
@@ -365,10 +365,11 @@ class PerformanceProfiler:
 
     # ===== RECOGNITION =====
     
-    def record_recognition_result(self, matched, score=0.0):
+    def record_recognition_result(self, track_id, matched, score=0.0, person_id=None):
         """Recognizer.recognize() returns result"""
         with self.lock:
             self.recognition_results.append({
+                "track_id": track_id,
                 "matched": matched,
                 "score": score,
                 "timestamp": time.time()
@@ -376,6 +377,8 @@ class PerformanceProfiler:
             
             if matched:
                 self.total_recognized += 1
+                if person_id is not None:
+                    self.successfully_recognized_tracks[str(track_id)] = person_id
             else:
                 # Check if retry scenario (0.30-0.41)
                 if 0.30 <= score <= 0.41:
@@ -488,11 +491,9 @@ class PerformanceProfiler:
         
         print("\n" + "="*80 + "\n")
         if "module_stats" in report:
-            print("\n [module timings]: avg ms per module per track_id")
-            for tid, mods in report["module_stats"].items():
-                print(f"  Track ID: {tid}")
-                for mod, stats in mods.items():
-                    print(f"    {mod}: count={stats['count']}, avg={stats['avg_ms']:.1f}ms, min={stats['min_ms']:.1f}ms, max={stats['max_ms']:.1f}ms")
+            print("\n [module timings]: avg ms per module")
+            for mod, stats in report["module_stats"].items():
+                print(f"    {mod}: count={stats['count']}, avg={stats['avg_ms']:.1f}ms, min={stats['min_ms']:.1f}ms, max={stats['max_ms']:.1f}ms")
     
 
     def get_all_sessions_summary(self):

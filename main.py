@@ -107,13 +107,12 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
         try:
             aligned = aligner.align(frame, best_kps)
             result = recognizer.recognize(aligned)
-            if profiler: profiler.record_recognition_result(result["matched"], result.get("score", 0.0))
         except Exception:
             print(f"[ERROR] Recognition retry failed for unknown track {track_id}")
             result = {"matched": False}
         elapsed = time.time() - t0
         if profiler: profiler.record_module_time(track_id, "aligned & recognize", elapsed)
-        if profiler: profiler.record_recognition_result(result["matched"], result.get("score", 0.0))
+        if profiler: profiler.record_recognition_result(track_id, result["matched"], result.get("score", 0.0), result.get("person_id"))
 
 
         if result["matched"]:
@@ -188,10 +187,12 @@ def process_single_face(track, frame, quality_selector, attendance_logger, align
         try:
             aligned = aligner.align(frame, best_kps)
             result = recognizer.recognize(aligned)
-            if profiler: profiler.record_recognition_result(result["matched"], result.get("score", 0.0))
         except Exception:
             print(f"[ERROR] Alignment/Recognition failed for track {track_id}")
             result = {"matched": False}
+
+        if profiler: 
+            profiler.record_recognition_result(track_id, result["matched"], result.get("score", 0.0), result.get("person_id"))
 
         if result["matched"]:
             attendance_logger.cache_recognition(track_id, result["person_id"], result["score"])
