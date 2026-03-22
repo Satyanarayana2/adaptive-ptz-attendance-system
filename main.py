@@ -26,6 +26,7 @@ from utils.ptz.axis_camera import AxisCamera
 from utils.ptz.presets import ENTRANCE_VIEW
 from utils.logs import Logger
 from utils.threaded_camera import ThreadedCamera
+from utils.threaded_detector import ThreadedDetector
 
 # Import FastAPI app and shared state
 from app import app, lock
@@ -237,6 +238,7 @@ def main():
 
     detector = InsightDetector()
     detector.prepare()
+    threaded_detector = ThreadedDetector(detector).start()
 
     embedder = InsightEmbedder()
     embedder.prepare()
@@ -304,9 +306,12 @@ def main():
     # checking if this is running in docker or not
     IS_DOCKER = os.path.exists("/.dockerenv")
     # Main loop
-    # Use 4 workers 
-    executor = ThreadPoolExecutor(max_workers=8)
+    # Use 3 workers to prevent CPU contention with ThreadedDetector
+    executor = ThreadPoolExecutor(max_workers=3)
+    frame_id = 0
+    last_processed_det_frame_id = -1
     while True:
+        frame_id += 1
         if web_app.stop_signal:
             print("[INFO] Stop signal received. Ending main loop.")
             break
@@ -319,11 +324,20 @@ def main():
         profiler.record_camera_frame()
         profiler.start_frame_processing()
 
-        faces = detector.detect(frame)
-        faces = [f for f in faces if f.get('score', 0.0) > 0.65]
-        # if len(faces) > 0:
-        #     print(f"[DEBUG] Detected {len(faces)} faces")
-        tracked_faces = tracker.update(faces)
+        # Update background detector with freshest frame
+        threaded_detector.update_frame(frame, frame_id)
+        
+        # Grab the latest asynchronously computed detections
+        faces, det_frame_id = threaded_detector.get_latest_detections()
+        
+        if det_frame_id > last_processed_det_frame_id:
+            # New detections arrived! Correct the tracker.
+            tracked_faces = tracker.update(faces)
+            last_processed_det_frame_id = det_frame_id
+        else:
+            # No new detections. Let the tracker predict physics at native FPS.
+            tracked_faces = tracker.predict_only()
+            
         profiler.record_detection(len(faces))
         profiler.record_tracking(len(tracked_faces))
 
@@ -438,6 +452,7 @@ def main():
 
     # Cleanup
     camera.release()
+    threaded_detector.stop()
     cv2.destroyAllWindows()
     db.close()
 

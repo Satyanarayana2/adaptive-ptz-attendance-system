@@ -67,6 +67,7 @@ class KalmanTrack:
         if not is_valid_bbox(bbox):
             raise ValueError(f"Invalid bounding box: {bbox}")
         self.kps = kps  # Update keypoints
+        
         cx = (bbox[0] + bbox[2]) / 2
         cy = (bbox[1] + bbox[3]) / 2
         w = bbox[2] - bbox[0]
@@ -185,6 +186,14 @@ class KalmanTracker:
         for tid in to_delete:
             del self.tracks[tid]
 
+        return self._format_results()
+
+    def predict_only(self):
+        """Advances the Kalman filter physics by one frame without any measurement correction."""
+        for track in self.tracks.values():
+            track.predict()
+        for track in self.tentative.values():
+            track.predict()
         return self._format_results()
 
     def _format_results(self):
