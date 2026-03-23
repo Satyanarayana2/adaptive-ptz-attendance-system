@@ -23,7 +23,6 @@ from core.session_controller import SessionController
 from core.performance_results import PerformanceProfiler
 
 from utils.ptz.axis_camera import AxisCamera
-from utils.ptz.presets import ENTRANCE_VIEW
 from utils.logs import Logger
 from utils.threaded_camera import ThreadedCamera
 from utils.threaded_detector import ThreadedDetector

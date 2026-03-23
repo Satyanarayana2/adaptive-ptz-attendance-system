@@ -52,9 +52,9 @@ COPY .insightface /root/.insightface
 # STEP9 Env variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    OMP_NUM_THREADS=4 \
-    OPENBLAS_NUM_THREADS=4 \
-    MKL_NUM_THREADS=4
+    OMP_NUM_THREADS=2 \
+    OPENBLAS_NUM_THREADS=2 \
+    MKL_NUM_THREADS=2
 
 # STEP10 Run application
 CMD ["python3", "main.py"]

@@ -164,7 +164,8 @@ class PerformanceProfiler:
             except Exception as e:
                 print(f"[ERROR] Failed to save performance report: {e}")
                 
-        threading.Thread(target=_write, daemon=True).start()
+        # Changed to daemon=False to ensure Python waits for the JSON write to finish during shutdown without corrupting the file
+        threading.Thread(target=_write, daemon=False).start()
 
     def _save_session_report(self, session_id):
         """Save session report to disk"""
