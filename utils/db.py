@@ -87,8 +87,8 @@ class Database:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS classes (
                 id SERIAL PRIMARY KEY,
-                batch VARCHAR(10) NOT NULL,
-                section VARCHAR(5) NOT NULL,
+                batch VARCHAR(50) NOT NULL,
+                section VARCHAR(20) NOT NULL,
                 CONSTRAINT unique_class_def UNIQUE (batch, section)
             );
         """)
@@ -246,22 +246,23 @@ class Database:
             cursor.close()
 
     def get_or_create_class(self, batch, section):
-        cur = self.conn.cursor()
-        try:
-            cur.execute("""
-                INSERT INTO classes (batch, section)
-                VALUES (%s, %s)
-                ON CONFLICT (batch, section)
-                DO UPDATE SET batch = EXCLUDED.batch
-                RETURNING id;
-                        """, (batch, section))
-            class_id = cur.fetchone()[0]
-            self.conn.commit()
-            return class_id
-        except Exception as e:
-            self.conn.rollback()
-            print(f"[DB ERROR] failed to get or create class {batch}-{section}: {e}")
-            return 1 # falling back to class 1 if error 
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            try:
+                cur.execute("""
+                    INSERT INTO classes (batch, section)
+                    VALUES (%s, %s)
+                    ON CONFLICT (batch, section)
+                    DO UPDATE SET batch = EXCLUDED.batch
+                    RETURNING id;
+                            """, (batch, section))
+                class_id = cur.fetchone()[0]
+                conn.commit()
+                return class_id
+            except Exception as e:
+                conn.rollback()
+                print(f"[DB ERROR] failed to get or create class {batch}-{section}: {e}")
+                return 1 # falling back to class 1 if error 
         
     def get_scheduler_state(self):
         """
@@ -272,34 +273,36 @@ class Database:
         current_day = now.isoweekday()
         current_time = now.time()
         
-        cur = self.conn.cursor(cursor_factory=RealDictCursor)
-        
-        # 1. Get CURRENT Active Session (if any)
-        cur.execute("""
-            SELECT cs.class_id, c.batch, c.section, cs.start_time, cs.end_time 
-            FROM class_schedule cs
-            JOIN classes c ON cs.class_id = c.id
-            WHERE cs.day_of_week = %s 
-            AND %s BETWEEN cs.start_time AND cs.end_time
-            ORDER BY cs.start_time DESC
-            LIMIT 1;
-        """, (current_day, current_time))
-        current_session = cur.fetchone()
-        
-        # 2. Get NEXT Upcoming Session
-        # We look for the first class that starts AFTER now
-        cur.execute("""
-            SELECT cs.class_id, c.batch, c.section, cs.start_time, cs.end_time 
-            FROM class_schedule cs
-            JOIN classes c ON cs.class_id = c.id
-            WHERE cs.day_of_week = %s 
-            AND cs.start_time > %s
-            ORDER BY cs.start_time ASC
-            LIMIT 1;
-        """, (current_day, current_time))
-        next_session = cur.fetchone()
-        
-        cur.close()
+        with self.get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # 1. Get CURRENT Active Session (if any)
+            cur.execute("""
+                SELECT cs.class_id, c.batch, c.section, cs.start_time, cs.end_time 
+                FROM class_schedule cs
+                JOIN classes c ON cs.class_id = c.id
+                WHERE cs.day_of_week = %s 
+                AND %s BETWEEN cs.start_time AND cs.end_time
+                ORDER BY cs.start_time DESC
+                LIMIT 1;
+            """, (current_day, current_time))
+            current_session = cur.fetchone()
+            
+            # 2. Get NEXT Upcoming Session
+            # We look for the first class that starts AFTER now
+            cur.execute("""
+                SELECT cs.class_id, c.batch, c.section, cs.start_time, cs.end_time 
+                FROM class_schedule cs
+                JOIN classes c ON cs.class_id = c.id
+                WHERE cs.day_of_week = %s 
+                AND cs.start_time > %s
+                ORDER BY cs.start_time ASC
+                LIMIT 1;
+            """, (current_day, current_time))
+            next_session = cur.fetchone()
+            
+            cur.close()
+
         
         return {
             "current": current_session, # None if we are in a break
@@ -311,27 +314,29 @@ class Database:
     # --------------------------------------------------------------
 
     def get_person_by_roll(self, roll_number):
-        cur = self.conn.cursor()
-        cur.execute(
-            "SELECT id, roll_number, name FROM persons WHERE roll_number=%s;",
-            (roll_number,)
-        )
-        return cur.fetchone()
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT id, roll_number, name FROM persons WHERE roll_number=%s;",
+                (roll_number,)
+            )
+            return cur.fetchone()
 
     # class_id = 1 should be removed later when the class_id will be added to the person creation form in the frontend and the create_person function will be called with the correct class_id from the frontend instead of hardcoding it here
     def create_person(self, roll_number, name, class_id=1):
-        cur = self.conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO persons (roll_number, name, class_id, created_at, updated_at)
-            VALUES (%s, %s, %s, NOW(), NOW())
-            RETURNING id;
-            """,
-            (roll_number, name, class_id)
-        )
-        person_id = cur.fetchone()[0]
-        self.conn.commit()
-        return person_id
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO persons (roll_number, name, class_id, created_at, updated_at)
+                VALUES (%s, %s, %s, NOW(), NOW())
+                RETURNING id;
+                """,
+                (roll_number, name, class_id)
+            )
+            person_id = cur.fetchone()[0]
+            conn.commit()
+            return person_id
     
     # -- not sure whether this is useful or not let it be later if not used we will remove it --
     def get_or_create_person(self, roll_number, name, class_id=1):
@@ -343,12 +348,13 @@ class Database:
     
     # this funciton is for updating the ID card image if a student want to change the or update the ID card image at that case we should run this fun
     def update_person_timestamp(self, person_id):
-        cur = self.conn.cursor()
-        cur.execute(
-            "UPDATE persons SET updated_at=NOW() WHERE id=%s;",
-            (person_id,)
-        )
-        self.conn.commit()
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE persons SET updated_at=NOW() WHERE id=%s;",
+                (person_id,)
+            )
+            conn.commit()
 
     def insert_embedding(self, person_id, embedding, image_path, type ='ADAPTIVE', quality_score=0.0):
         with self.get_connection() as conn:
@@ -378,26 +384,27 @@ class Database:
         :param self: Description
         :param class_id: Description 
         """
-        cur = self.conn.cursor(cursor_factory=RealDictCursor)
-        query = """
-            SELECT
-                ft.person_id,
-                p.name,
-                p.roll_number,
-                ft.embedding,
-                ft.type,
-                ft.id as template_id
-            FROM face_templates ft
-            JOIN persons p ON ft.person_id = p.id;
-        """
-        if class_id:
-            query += " WHERE p.class_id = %s;"
-            params = (class_id,)
-        else:
-            params = ()
-        cur.execute(query, params)
-        rows = cur.fetchall()
-        cur.close()
+        with self.get_connection() as conn:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            query = """
+                SELECT
+                    ft.person_id,
+                    p.name,
+                    p.roll_number,
+                    ft.embedding,
+                    ft.type,
+                    ft.id as template_id
+                FROM face_templates ft
+                JOIN persons p ON ft.person_id = p.id;
+            """
+            if class_id:
+                query += " WHERE p.class_id = %s;"
+                params = (class_id,)
+            else:
+                params = ()
+            cur.execute(query, params)
+            rows = cur.fetchall()
+            cur.close()
         gallery = {}
         for row in rows:
             pid = row['person_id']
@@ -416,34 +423,38 @@ class Database:
 
     # This function will be used to update the template usage metadata after each attendance marking so that we can implement smarter template management strategies in the future (like retiring old templates, promoting good templates to anchors, etc.)
     def update_template_usage(self, template_id):
-        cur = self.conn.cursor()
-        cur.execute("UPDATE face_templates SET last_matched_at = NOW() WHERE id = %s;", (template_id,))
-        self.conn.commit()
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("UPDATE face_templates SET last_matched_at = NOW() WHERE id = %s;", (template_id,))
+            conn.commit()
            
     def get_person_count(self):
-        cur = self.conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM persons;")
-        count = cur.fetchone()[0]
-        cur.close()
-        return count
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM persons;")
+            count = cur.fetchone()[0]
+            cur.close()
+            return count
     
     # whats the use, if not used should be removed later
     def image_ref_exists(self, image_ref):
-        cur = self.conn.cursor()
-        cur.execute(
-            "SELECT 1 FROM face_templates WHERE image_path=%s LIMIT 1;",
-            (image_ref,)
-        )
-        return cur.fetchone() is not None
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT 1 FROM face_templates WHERE image_path=%s LIMIT 1;",
+                (image_ref,)
+            )
+            return cur.fetchone() is not None
     
     def get_embeddings_by_person(self, person_id):
-        cur = self.conn.cursor()
-        cur.execute(
-            "SELECT embedding FROM face_templates WHERE person_id=%s;",
-            (person_id,)
-        )
-        rows = cur.fetchall()
-        return [row[0] for row in rows]
+        with self.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT embedding FROM face_templates WHERE person_id=%s;",
+                (person_id,)
+            )
+            rows = cur.fetchall()
+            return [row[0] for row in rows]
 
     # --------------------------------------------------------------
     # ATTENDANCE FUNCTIONS
